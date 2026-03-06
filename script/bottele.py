@@ -1,4 +1,4 @@
-import os, logging, uuid, random, string, asyncio
+import os, logging, uuid, random, string, asyncio, time
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -9,9 +9,6 @@ from telegram.ext import (
 log = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
-# ══════════════════════════════════════════════
-#  CONFIG
-# ══════════════════════════════════════════════
 WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-three.vercel.app").rstrip("/")
 INIT_COINS    = 50
 BYPASS_REWARD = 20
@@ -38,10 +35,12 @@ API_HDR = {
 }
 
 # ══════════════════════════════════════════════
-#  RAM DB
+#  RAM DB — dùng global dict thay ctx.user_data
+#  vì Vercel serverless reset ctx mỗi request
 # ══════════════════════════════════════════════
-users_db = {}
-keys_db  = {}
+users_db    = {}   # uid -> {coins, ...}
+keys_db     = {}   # key -> {used, uid}
+sessions_db = {}   # uid -> {state, photo_id, ...}
 
 def esc(text: str) -> str:
     for ch in r'\_*[]()~`>#+-=|{}.!':
@@ -62,6 +61,15 @@ def spend_coins(uid, n):
     if u["coins"] < n: return False, u["coins"]
     u["coins"] -= n; return True, u["coins"]
 
+def get_session(uid):
+    uid = str(uid)
+    if uid not in sessions_db:
+        sessions_db[uid] = {}
+    return sessions_db[uid]
+
+def clear_session(uid):
+    sessions_db[str(uid)] = {}
+
 def new_key(uid):
     k = str(uuid.uuid4())
     keys_db[k] = {"used": False, "uid": str(uid)}
@@ -76,9 +84,8 @@ def use_key(k):
     if k in keys_db: keys_db[k]["used"] = True
 
 # ══════════════════════════════════════════════
-#  AI IMAGE API (từ main.py)
+#  AI IMAGE API
 # ══════════════════════════════════════════════
-
 def random_email():
     rnd = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
     return f"{rnd}@{random.choice(TEMP_DOMAINS)}"
@@ -88,8 +95,8 @@ def create_account():
     r = requests.post(
         'https://identitytoolkit.googleapis.com/v1/accounts:signUp',
         params={'key': FIREBASE_KEY}, headers=FIREBASE_HDR,
-        json={'returnSecureToken': True, 'email': email, 'password': email,
-              'clientType': 'CLIENT_TYPE_WEB'}, timeout=15
+        json={'returnSecureToken': True, 'email': email, 'password': email, 'clientType': 'CLIENT_TYPE_WEB'},
+        timeout=15
     ).json()
     if 'idToken' not in r:
         raise Exception(f"Firebase loi: {r.get('error',{}).get('message', str(r))}")
@@ -103,71 +110,38 @@ def create_account():
     return email, r2['data']['session_token']
 
 def generate_image(image_bytes: bytes, filename: str, prompt: str) -> bytes:
-    """Tạo ảnh AI, trả về bytes ảnh kết quả"""
-    # 1. Tạo tài khoản
     email, token = create_account()
-    log.info(f"[AI] Tai khoan: {email}")
+    log.info(f"[AI] Account: {email}")
     headers = {**API_HDR, "x-session-token": token}
 
-    # 2. Lấy pre-signed URL để upload
-    r = requests.post(
-        "https://sv.aivideo123.site/api/item/get_pre_url",
-        headers=headers,
-        json={"file_name": filename, "file_type": 0},
-        timeout=15
-    ).json()
-    if r["code"] != 1:
-        raise Exception("get_pre_url that bai")
-    s3_url = r["data"]["url"]
-    fields = r["data"]["fields"]
-    s3_key = fields["key"]
+    r = requests.post("https://sv.aivideo123.site/api/item/get_pre_url",
+        headers=headers, json={"file_name": filename, "file_type": 0}, timeout=15).json()
+    if r["code"] != 1: raise Exception("get_pre_url that bai")
+    s3_url = r["data"]["url"]; fields = r["data"]["fields"]; s3_key = fields["key"]
 
-    # 3. Upload ảnh lên S3
-    log.info(f"[AI] Upload anh...")
-    up = requests.post(
-        s3_url, data=fields,
-        files={"file": (filename, image_bytes, "image/jpeg")},
-        timeout=30
-    )
+    up = requests.post(s3_url, data=fields,
+        files={"file": (filename, image_bytes, "image/jpeg")}, timeout=30)
     if up.status_code not in [200, 201, 204]:
         raise Exception(f"Upload loi {up.status_code}")
-    log.info(f"[AI] Upload xong")
 
-    # 4. Gọi inference
-    log.info(f"[AI] Goi AI voi prompt: {prompt}")
-    inf = requests.post(
-        "https://sv.aivideo123.site/api/item/inference2",
+    inf = requests.post("https://sv.aivideo123.site/api/item/inference2",
         headers=headers,
         json={"s3_path": s3_key, "mask_path": "", "prompt": prompt, "ai_model_type": 3},
-        timeout=15
-    ).json()
-    if inf["code"] != 1:
-        raise Exception("Inference that bai")
+        timeout=15).json()
+    if inf["code"] != 1: raise Exception("Inference that bai")
     item_uid  = inf["data"]["item"]["uid"]
     time_need = inf["data"]["item"]["time_need"]
-    log.info(f"[AI] Doi {time_need}s...")
-
-    # 5. Chờ AI xử lý
-    import time
+    log.info(f"[AI] Waiting {time_need}s...")
     time.sleep(time_need)
 
-    # 6. Lấy kết quả
-    r2 = requests.post(
-        "https://sv.aivideo123.site/api/item/get_items",
-        headers=headers,
-        json={"page": 0, "page_size": 50},
-        timeout=15
-    ).json()
+    r2 = requests.post("https://sv.aivideo123.site/api/item/get_items",
+        headers=headers, json={"page": 0, "page_size": 50}, timeout=15).json()
     result_url = ""
     for item in r2["data"]["items"]:
         if item["uid"] == item_uid:
-            result_url = item.get("thumbnail", "")
-            break
-    if not result_url:
-        raise Exception("Khong tim thay ket qua")
+            result_url = item.get("thumbnail", ""); break
+    if not result_url: raise Exception("Khong tim thay ket qua")
 
-    # 7. Tải ảnh kết quả
-    log.info(f"[AI] Tai anh ket qua: {result_url}")
     img_resp = requests.get(result_url, timeout=20)
     return img_resp.content
 
@@ -195,15 +169,14 @@ def kb_cancel():
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u    = update.effective_user
     user = get_user(u.id)
-    name = esc(u.first_name or "ban")
+    clear_session(u.id)
     await update.message.reply_text(
         f"🌟 *AI IMAGE BOT*\n\n"
-        f"👋 Chao *{name}*\\!\n\n"
+        f"👋 Chao *{esc(u.first_name or 'ban')}*\\!\n\n"
         f"💎 Xu cua ban: `{user['coins']} xu`\n"
         f"🎨 Chi phi tao anh: `{COST_IMAGE} xu / lan`\n\n"
         f"👇 Chon tinh nang:",
-        reply_markup=kb_main(user["coins"]),
-        parse_mode="MarkdownV2"
+        reply_markup=kb_main(user["coins"]), parse_mode="MarkdownV2"
     )
 
 async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -212,50 +185,46 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d    = q.data
     u    = q.from_user
     user = get_user(u.id)
+    sess = get_session(u.id)
 
     if d == "noop": return
 
     if d == "home":
+        clear_session(u.id)
         user = get_user(u.id)
         await q.edit_message_text(
             f"🏠 *Menu*\n\n💎 Xu: `{user['coins']}`",
             reply_markup=kb_main(user["coins"]), parse_mode="MarkdownV2"
-        )
-        ctx.user_data.clear(); return
+        ); return
 
     if d == "balance":
-        name = esc(u.full_name or "")
         await q.edit_message_text(
-            f"💰 *VI XU*\n\n"
-            f"👤 {name}\n🆔 `{u.id}`\n\n"
+            f"💰 *VI XU*\n\n👤 {esc(u.full_name or '')}\n🆔 `{u.id}`\n\n"
             f"💎 So du: `{user['coins']} xu`\n"
-            f"🎨 Anh da tao: `{user.get('total_images', 0)}`\n"
-            f"🔗 Da vuot: `{user.get('total_bypassed', 0)} lan`",
+            f"🎨 Anh da tao: `{user.get('total_images',0)}`\n"
+            f"🔗 Da vuot: `{user.get('total_bypassed',0)} lan`",
             reply_markup=kb_back(), parse_mode="MarkdownV2"
         ); return
 
     if d == "bypass":
         k    = new_key(u.id)
         link = f"{WEB_BASE_URL}/result/{k}"
-        ctx.user_data["pending_key"] = k
+        sess["pending_key"] = k
         await q.edit_message_text(
             f"🔗 *KIEM XU QUA LINK*\n\n"
             f"🎁 Phan thuong: `\\+{BYPASS_REWARD} xu`\n\n"
-            f"1️⃣ Bam nut link ben duoi\n"
-            f"2️⃣ Hoan thanh cac buoc tren web\n"
-            f"3️⃣ Sao chep key hien thi\n"
-            f"4️⃣ Bam *Nhap Key* va dan vao\n\n"
-            f"⚠️ Key chi dung duoc *1 lan*",
+            f"1️⃣ Bam nut link ben duoi\n2️⃣ Hoan thanh tren web\n"
+            f"3️⃣ Sao chep key\n4️⃣ Bam *Nhap Key* va dan vao\n\n"
+            f"⚠️ Key chi dung *1 lan*",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔗 Bam Vao Day De Lay Key", url=link)],
                 [InlineKeyboardButton("🔑 Nhap Key",  callback_data="key_enter")],
                 [InlineKeyboardButton("🏠 Quay Lai",  callback_data="home")],
-            ]),
-            parse_mode="MarkdownV2"
+            ]), parse_mode="MarkdownV2"
         ); return
 
     if d == "key_enter":
-        ctx.user_data["state"] = "key"
+        sess["state"] = "key"
         await q.edit_message_text(
             "🔑 *NHAP KEY*\n\nDan key tu trang web vao day:",
             reply_markup=kb_cancel(), parse_mode="MarkdownV2"
@@ -264,16 +233,13 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if d == "img_start":
         if user["coins"] < COST_IMAGE:
             await q.edit_message_text(
-                f"❌ *Khong du xu\\!*\n\n"
-                f"Can `{COST_IMAGE} xu` \\| Co `{user['coins']} xu`\n\n"
-                f"Vuot link de kiem them xu\\!",
+                f"❌ *Khong du xu\\!*\n\nCan `{COST_IMAGE} xu` \\| Co `{user['coins']} xu`",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔗 Kiem Xu Ngay", callback_data="bypass")],
                     [InlineKeyboardButton("🏠 Ve Menu",      callback_data="home")],
-                ]),
-                parse_mode="MarkdownV2"
+                ]), parse_mode="MarkdownV2"
             ); return
-        ctx.user_data["state"] = "wait_photo"
+        sess["state"] = "wait_photo"
         await q.edit_message_text(
             f"🎨 *TAO ANH AI*\n\n"
             f"💎 So du: `{user['coins']} xu` \\| Chi phi: `{COST_IMAGE} xu`\n\n"
@@ -285,24 +251,25 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if d == "help":
         await q.edit_message_text(
             f"📖 *HUONG DAN*\n\n"
-            f"🎨 *TAO ANH AI:*\n"
-            f"• Bam Tao Anh AI → gui anh → nhap prompt\n"
+            f"🎨 *TAO ANH AI:*\n• Bam Tao Anh AI → gui anh → nhap prompt\n"
             f"• Chi phi: `{COST_IMAGE} xu` moi lan\n\n"
-            f"🔗 *KIEM XU:*\n"
-            f"• Bam Kiem Xu → vao link → hoan thanh → nhap key\n"
+            f"🔗 *KIEM XU:*\n• Bam Kiem Xu → vao link → nhap key\n"
             f"• Moi lan: `\\+{BYPASS_REWARD} xu`",
             reply_markup=kb_back(), parse_mode="MarkdownV2"
         ); return
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if ctx.user_data.get("state") != "wait_photo": return
+    u    = update.effective_user
+    sess = get_session(u.id)
+    if sess.get("state") != "wait_photo":
+        return
     photo = update.message.photo[-1]
-    ctx.user_data["photo_id"]   = photo.file_id
-    ctx.user_data["photo_name"] = f"photo_{photo.file_id[:8]}.jpg"
-    ctx.user_data["state"]      = "wait_prompt"
+    sess["photo_id"]   = photo.file_id
+    sess["photo_name"] = f"photo_{photo.file_id[:8]}.jpg"
+    sess["state"]      = "wait_prompt"
     await update.message.reply_text(
         "✅ *Da nhan anh\\!*\n\n"
-        "✏️ *Buoc 2:* Nhap prompt \\(mo ta ban muon chinh anh nhu the nao\\)\n\n"
+        "✏️ *Buoc 2:* Nhap prompt \\(mo ta muon chinh anh nhu the nao\\)\n\n"
         "Vi du:\n"
         "`wear a red summer dress`\n"
         "`wearing a suit, professional`\n"
@@ -311,8 +278,9 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    u     = update.effective_user
-    state = ctx.user_data.get("state")
+    u    = update.effective_user
+    sess = get_session(u.id)
+    state = sess.get("state")
     text  = update.message.text.strip()
 
     # ── Nhập key bypass ──
@@ -331,8 +299,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("🎨 Tao Anh Ngay", callback_data="img_start")],
                     [InlineKeyboardButton("🔗 Kiem Them",    callback_data="bypass")],
                     [InlineKeyboardButton("🏠 Ve Menu",      callback_data="home")],
-                ]),
-                parse_mode="MarkdownV2"
+                ]), parse_mode="MarkdownV2"
             )
         elif status == "used":
             await update.message.reply_text(
@@ -340,8 +307,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔗 Lay Key Moi", callback_data="bypass")],
                     [InlineKeyboardButton("🏠 Ve Menu",     callback_data="home")],
-                ]),
-                parse_mode="MarkdownV2"
+                ]), parse_mode="MarkdownV2"
             )
         else:
             await update.message.reply_text(
@@ -349,22 +315,20 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔑 Nhap Lai", callback_data="key_enter")],
                     [InlineKeyboardButton("🏠 Ve Menu",  callback_data="home")],
-                ]),
-                parse_mode="MarkdownV2"
+                ]), parse_mode="MarkdownV2"
             )
-        ctx.user_data.clear(); return
+        clear_session(u.id); return
 
-    # ── Nhập prompt để tạo ảnh ──
+    # ── Nhập prompt tạo ảnh ──
     if state == "wait_prompt":
-        photo_id   = ctx.user_data.get("photo_id")
-        photo_name = ctx.user_data.get("photo_name", "photo.jpg")
+        photo_id   = sess.get("photo_id")
+        photo_name = sess.get("photo_name", "photo.jpg")
         prompt     = text
 
         if not photo_id:
             await update.message.reply_text("❌ Khong tim thay anh\\. Gui lai anh nhe\\!", parse_mode="MarkdownV2")
-            ctx.user_data.clear(); return
+            clear_session(u.id); return
 
-        user = get_user(u.id)
         ok, new_bal = spend_coins(u.id, COST_IMAGE)
         if not ok:
             await update.message.reply_text(
@@ -372,64 +336,49 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔗 Kiem Xu", callback_data="bypass")],
                     [InlineKeyboardButton("🏠 Ve Menu", callback_data="home")],
-                ]),
-                parse_mode="MarkdownV2"
+                ]), parse_mode="MarkdownV2"
             )
-            ctx.user_data.clear(); return
+            clear_session(u.id); return
 
-        # Gửi thông báo đang xử lý
         msg = await update.message.reply_text(
-            f"⏳ *DANG TAO ANH AI\\.\\.\\.*\n\n"
-            f"📝 Prompt: `{esc(prompt)}`\n\n"
-            f"🔄 Buoc 1/4: Dang tao tai khoan\\.\\.\\.",
+            f"⏳ *DANG XU LY\\.\\.\\.*\n\n"
+            f"📝 Prompt: `{esc(prompt[:60])}`\n\n"
+            f"📥 Dang tai anh\\.\\.\\.",
             parse_mode="MarkdownV2"
         )
-
-        ctx.user_data.clear()
+        clear_session(u.id)
 
         try:
-            # Tải ảnh từ Telegram
-            await msg.edit_text(
-                f"⏳ *DANG TAO ANH AI\\.\\.\\.*\n\n"
-                f"📝 Prompt: `{esc(prompt)}`\n\n"
-                f"📥 Buoc 1/4: Dang tai anh cua ban\\.\\.\\.",
-                parse_mode="MarkdownV2"
-            )
             photo_file  = await update.get_bot().get_file(photo_id)
             photo_bytes = await photo_file.download_as_bytearray()
 
             await msg.edit_text(
-                f"⏳ *DANG TAO ANH AI\\.\\.\\.*\n\n"
-                f"📝 Prompt: `{esc(prompt)}`\n\n"
-                f"🔑 Buoc 2/4: Dang tao tai khoan\\.\\.\\.",
+                f"⏳ *DANG XU LY\\.\\.\\.*\n\n"
+                f"📝 Prompt: `{esc(prompt[:60])}`\n\n"
+                f"🔑 Dang tao tai khoan AI\\.\\.\\.",
                 parse_mode="MarkdownV2"
             )
 
-            # Chạy generate trong thread để không block
             loop = asyncio.get_event_loop()
             result_bytes = await loop.run_in_executor(
-                None,
-                generate_image,
-                bytes(photo_bytes), photo_name, prompt
+                None, generate_image, bytes(photo_bytes), photo_name, prompt
             )
 
             await msg.edit_text(
-                f"⏳ *DANG TAO ANH AI\\.\\.\\.*\n\n"
-                f"📝 Prompt: `{esc(prompt)}`\n\n"
-                f"📤 Buoc 4/4: Dang gui ket qua\\.\\.\\.",
+                f"⏳ *DANG XU LY\\.\\.\\.*\n\n"
+                f"📝 Prompt: `{esc(prompt[:60])}`\n\n"
+                f"📤 Dang gui ket qua\\.\\.\\.",
                 parse_mode="MarkdownV2"
             )
 
-            # Cập nhật stats
             user = get_user(u.id)
             user["total_images"] = user.get("total_images", 0) + 1
 
-            # Gửi ảnh kết quả
             await update.message.reply_photo(
                 photo=result_bytes,
                 caption=(
                     f"✨ *KET QUA TAO ANH AI*\n\n"
-                    f"📝 Prompt: `{esc(prompt[:80])}`\n\n"
+                    f"📝 `{esc(prompt[:80])}`\n\n"
                     f"💎 Con lai: `{new_bal} xu`"
                 ),
                 parse_mode="MarkdownV2",
@@ -441,33 +390,25 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await msg.delete()
 
         except Exception as e:
-            # Hoàn xu nếu lỗi
             add_coins(u.id, COST_IMAGE)
             log.error(f"Generate error: {e}")
-            err = esc(str(e)[:100])
             await msg.edit_text(
-                f"❌ *Co loi xay ra\\!*\n\n"
-                f"Da hoan lai `{COST_IMAGE} xu`\n\n"
-                f"Loi: `{err}`",
+                f"❌ *Co loi xay ra\\!*\n\nDa hoan lai `{COST_IMAGE} xu`\n\n"
+                f"Loi: `{esc(str(e)[:100])}`",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Thu Lai",   callback_data="img_start")],
-                    [InlineKeyboardButton("🏠 Ve Menu",   callback_data="home")],
-                ]),
-                parse_mode="MarkdownV2"
+                    [InlineKeyboardButton("🔄 Thu Lai",  callback_data="img_start")],
+                    [InlineKeyboardButton("🏠 Ve Menu",  callback_data="home")],
+                ]), parse_mode="MarkdownV2"
             )
         return
 
     # ── Tin nhắn thường ──
     user = get_user(u.id)
-    name = esc(u.first_name or "ban")
     await update.message.reply_text(
-        f"👋 Xin chao *{name}*\\!\n💎 Xu: `{user['coins']}`",
+        f"👋 Xin chao *{esc(u.first_name or 'ban')}*\\!\n💎 Xu: `{user['coins']}`",
         reply_markup=kb_main(user["coins"]), parse_mode="MarkdownV2"
     )
 
-# ══════════════════════════════════════════════
-#  SETUP
-# ══════════════════════════════════════════════
 def setup_application(bot_token: str) -> Application:
     application = Application.builder().token(bot_token).build()
     application.add_handler(CommandHandler("start", cmd_start))
