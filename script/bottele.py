@@ -9,8 +9,8 @@ from telegram.ext import (
 log = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
-WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-lilac.vercel.app").rstrip("/")
-INIT_COINS    = 1000000000000000000000000000000000000
+WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-three.vercel.app").rstrip("/")
+INIT_COINS    = 100000000000000000000000000000000000000000000000000000
 BYPASS_REWARD = 20
 COST_IMAGE    = 10
 
@@ -46,6 +46,18 @@ def esc(text: str) -> str:
     for ch in r'\_*[]()~`>#+-=|{}.!':
         text = text.replace(ch, f'\\{ch}')
     return text
+
+def render_cmd(title: str, lines: list, extra: str = "") -> str:
+    """Tạo block kiểu CMD terminal dạng monospace."""
+    bar = "█" * min(len(lines) * 2, 20)
+    body = "\n".join(f"`{l}`" for l in lines[-12:])  # hiện tối đa 12 dòng cuối
+    tail = f"\n\n_{esc(extra)}_" if extra else ""
+    return (
+        f"⚡ *{esc(title)}*\n\n"
+        f"`{bar}`\n\n"
+        f"{body}"
+        f"{tail}"
+    )
 
 def get_user(uid):
     uid = str(uid)
@@ -109,21 +121,40 @@ def create_account():
         raise Exception(f"init_data loi: {r2}")
     return email, r2['data']['session_token']
 
-def generate_image(image_bytes: bytes, filename: str, prompt: str) -> bytes:
+def generate_image(image_bytes: bytes, filename: str, prompt: str,
+                   log_cb=None) -> bytes:
+    lines = []
+    def push(line: str):
+        lines.append(line)
+        if log_cb:
+            try: log_cb(list(lines))
+            except: pass
+        log.info(line)
+
+    push(f"[*] Target Identified: {filename[:24]}")
+    push("[*] Loading AI Engine...")
+
     email, token = create_account()
-    log.info(f"[AI] Account: {email}")
+    push(f"[*] Account: {email[:28]}")
+    push("[~] Session token OK")
+
     headers = {**API_HDR, "x-session-token": token}
 
+    push("[>] Requesting upload URL...")
     r = requests.post("https://sv.aivideo123.site/api/item/get_pre_url",
         headers=headers, json={"file_name": filename, "file_type": 0}, timeout=15).json()
     if r["code"] != 1: raise Exception("get_pre_url that bai")
     s3_url = r["data"]["url"]; fields = r["data"]["fields"]; s3_key = fields["key"]
+    push("[+] Upload URL received!")
 
+    push(f"[>] Uploading image ({len(image_bytes)//1024} KB)...")
     up = requests.post(s3_url, data=fields,
         files={"file": (filename, image_bytes, "image/jpeg")}, timeout=30)
     if up.status_code not in [200, 201, 204]:
         raise Exception(f"Upload loi {up.status_code}")
+    push(f"[+] HTTP {up.status_code} OK. Upload accepted!")
 
+    push(f"[>] Sending to AI - prompt: \"{prompt[:30]}\"")
     inf = requests.post("https://sv.aivideo123.site/api/item/inference2",
         headers=headers,
         json={"s3_path": s3_key, "mask_path": "", "prompt": prompt, "ai_model_type": 3},
@@ -131,9 +162,11 @@ def generate_image(image_bytes: bytes, filename: str, prompt: str) -> bytes:
     if inf["code"] != 1: raise Exception("Inference that bai")
     item_uid  = inf["data"]["item"]["uid"]
     time_need = inf["data"]["item"]["time_need"]
-    log.info(f"[AI] Waiting {time_need}s...")
+    push(f"[+] AI job queued! ETA: {time_need}s")
+    push("[~] AI dang xu ly anh...")
     time.sleep(time_need)
 
+    push("[>] Fetching result...")
     r2 = requests.post("https://sv.aivideo123.site/api/item/get_items",
         headers=headers, json={"page": 0, "page_size": 50}, timeout=15).json()
     result_url = ""
@@ -141,8 +174,11 @@ def generate_image(image_bytes: bytes, filename: str, prompt: str) -> bytes:
         if item["uid"] == item_uid:
             result_url = item.get("thumbnail", ""); break
     if not result_url: raise Exception("Khong tim thay ket qua")
+    push("[+] Result URL found!")
 
+    push("[>] Downloading output image...")
     img_resp = requests.get(result_url, timeout=20)
+    push("[+] Done! Sending to you...")
     return img_resp.content
 
 # ══════════════════════════════════════════════
@@ -341,35 +377,76 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             clear_session(u.id); return
 
         msg = await update.message.reply_text(
-            f"⏳ *DANG XU LY\\.\\.\\.*\n\n"
-            f"📝 Prompt: `{esc(prompt[:60])}`\n\n"
-            f"📥 Dang tai anh\\.\\.\\.",
+            render_cmd("AI IMAGE BOT DANG XU LY...",
+                       ["[*] Nhan lenh tao anh...", f"[*] Prompt: {prompt[:40]}"],
+                       "Dang khoi dong..."),
             parse_mode="MarkdownV2"
         )
         clear_session(u.id)
 
+        # Shared log list — thread-safe append
+        cmd_lines = [f"[*] Prompt: {prompt[:40]}"]
+        last_sent = [0]  # track last update time
+
+        import threading, time as _time
+        lock = threading.Lock()
+
+        def log_cb(lines):
+            with lock:
+                cmd_lines.clear()
+                cmd_lines.extend(lines)
+
         try:
             photo_file  = await update.get_bot().get_file(photo_id)
             photo_bytes = await photo_file.download_as_bytearray()
+            cmd_lines.append("[+] Photo downloaded!")
 
-            await msg.edit_text(
-                f"⏳ *DANG XU LY\\.\\.\\.*\n\n"
-                f"📝 Prompt: `{esc(prompt[:60])}`\n\n"
-                f"🔑 Dang tao tai khoan AI\\.\\.\\.",
-                parse_mode="MarkdownV2"
-            )
+            # Cập nhật CMD message mỗi khi log_cb được gọi
+            # Dùng queue để bridge thread -> async
+            import queue
+            log_queue = queue.Queue()
+
+            def log_cb_q(lines):
+                log_queue.put(list(lines))
+
+            async def updater():
+                while True:
+                    try:
+                        lines = log_queue.get_nowait()
+                        try:
+                            await msg.edit_text(
+                                render_cmd("AI IMAGE BOT DANG XU LY...", lines),
+                                parse_mode="MarkdownV2"
+                            )
+                        except:
+                            pass
+                    except queue.Empty:
+                        pass
+                    await asyncio.sleep(1.5)
 
             loop = asyncio.get_event_loop()
-            result_bytes = await loop.run_in_executor(
-                None, generate_image, bytes(photo_bytes), photo_name, prompt
-            )
 
-            await msg.edit_text(
-                f"⏳ *DANG XU LY\\.\\.\\.*\n\n"
-                f"📝 Prompt: `{esc(prompt[:60])}`\n\n"
-                f"📤 Dang gui ket qua\\.\\.\\.",
-                parse_mode="MarkdownV2"
-            )
+            # Chạy updater song song với generate
+            updater_task = asyncio.ensure_future(updater())
+            try:
+                result_bytes = await loop.run_in_executor(
+                    None, generate_image,
+                    bytes(photo_bytes), photo_name, prompt, log_cb_q
+                )
+            finally:
+                updater_task.cancel()
+
+            # Hiện log cuối
+            final_lines = []
+            while not log_queue.empty():
+                final_lines = log_queue.get_nowait()
+            if final_lines:
+                try:
+                    await msg.edit_text(
+                        render_cmd("AI IMAGE BOT DANG XU LY...", final_lines),
+                        parse_mode="MarkdownV2"
+                    )
+                except: pass
 
             user = get_user(u.id)
             user["total_images"] = user.get("total_images", 0) + 1
@@ -392,9 +469,10 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             add_coins(u.id, COST_IMAGE)
             log.error(f"Generate error: {e}")
+            err_lines = list(cmd_lines) + [f"[!] ERROR: {str(e)[:60]}"]
             await msg.edit_text(
-                f"❌ *Co loi xay ra\\!*\n\nDa hoan lai `{COST_IMAGE} xu`\n\n"
-                f"Loi: `{esc(str(e)[:100])}`",
+                render_cmd("LOI XAY RA", err_lines,
+                           f"Da hoan lai {COST_IMAGE} xu"),
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Thu Lai",  callback_data="img_start")],
                     [InlineKeyboardButton("🏠 Ve Menu",  callback_data="home")],
@@ -416,5 +494,3 @@ def setup_application(bot_token: str) -> Application:
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     return application
-
-
