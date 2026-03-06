@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ppapikey – Key của bạn</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #eef0f8;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 20px;
+      padding: 36px 30px 30px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 8px 40px rgba(80,80,140,0.12);
+      animation: fadeUp 0.45s ease both;
+      text-align: center;
+    }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(18px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .logo {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 1.2rem; font-weight: 700; color: #5b5fc7; margin-bottom: 14px;
+    }
+    h1 { font-size: 1.4rem; font-weight: 700; color: #1a1a2e; margin-bottom: 5px; }
+    .subtitle { font-size: 0.875rem; color: #888aab; margin-bottom: 22px; }
+
+    /* Section cards */
+    .section {
+      background: #f9f9fd; border: 1px solid #e8e8f5;
+      border-radius: 12px; padding: 16px 18px; text-align: left; margin-bottom: 14px;
+    }
+    .section-label {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 0.78rem; color: #888aab; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;
+    }
+    .game-name { font-size: 0.95rem; font-weight: 700; color: #5b5fc7; }
+
+    /* Link row */
+    .link-row {
+      display: flex; align-items: center;
+      background: #fff; border: 1.5px solid #e0e0f0;
+      border-radius: 9px; padding: 11px 14px; gap: 10px; margin-bottom: 12px;
+    }
+    .link-row span {
+      flex: 1; font-size: 0.85rem; color: #333;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .copy-icon {
+      cursor: pointer; color: #aaa; flex-shrink: 0; transition: color 0.2s;
+    }
+    .copy-icon:hover { color: #5b5fc7; }
+
+    /* Buttons */
+    .btn {
+      width: 100%; border: none; border-radius: 10px;
+      padding: 13px; font-family: 'Inter', sans-serif;
+      font-size: 0.93rem; font-weight: 600; cursor: pointer;
+      transition: all 0.2s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      margin-bottom: 10px; text-decoration: none;
+    }
+    .btn-outline {
+      background: transparent; border: 1.5px solid #5b5fc7; color: #5b5fc7;
+    }
+    .btn-outline:hover { background: rgba(91,95,199,0.07); }
+    .btn-green { background: #22c55e; color: #fff; }
+    .btn-green:hover { background: #16a34a; transform: translateY(-1px); box-shadow: 0 5px 18px rgba(34,197,94,0.3); }
+
+    /* Info */
+    .info-divider { border: none; border-top: 1px solid #eee; margin: 12px 0 10px; }
+    .info-line { font-size: 0.8rem; color: #aaa; margin-bottom: 6px; }
+    .info-val { font-size: 0.85rem; color: #555; font-family: monospace; }
+    .info-val strong { color: #333; font-family: 'Inter', sans-serif; font-size: 0.83rem; display: block; margin-bottom: 2px; }
+
+    /* Back link */
+    .back { display: inline-block; margin-top: 6px; font-size: 0.82rem; color: #888aab; text-decoration: none; }
+    .back:hover { color: #5b5fc7; }
+
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 28px; left: 50%;
+      transform: translateX(-50%) translateY(60px);
+      background: #22c55e; color: #fff;
+      padding: 11px 24px; border-radius: 50px;
+      font-size: 0.88rem; font-weight: 600;
+      opacity: 0; transition: all 0.3s ease;
+      z-index: 999; white-space: nowrap;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      ppapikey
+    </div>
+    <h1>Lấy Link Key</h1>
+    <p class="subtitle">Nhận link key của bạn một cách nhanh chóng</p>
+
+    <!-- Game info -->
+    <div class="section">
+      <div class="section-label">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5b5fc7" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+        Thông tin BOT
+      </div>
+      <div class="game-name">BOT TELE V1</div>
+    </div>
+
+    <!-- Link key -->
+    <div class="section">
+      <div class="section-label">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5b5fc7" stroke-width="2">
+          <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+          <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+        </svg>
+        Link Key của bạn
+      </div>
+
+      <div class="link-row">
+        <span id="linkText">{{ full_url }}</span>
+        <span class="copy-icon" onclick="copyLink()" title="Sao chép">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
+        </span>
+      </div>
+
+      <a href="{{ full_url }}" target="_blank" class="btn btn-outline">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+          <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+        </svg>
+        Mở Link
+      </a>
+
+      <button class="btn btn-green" onclick="copyLink()">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2"/>
+          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+        </svg>
+        Sao Chép Link
+      </button>
+
+      <hr class="info-divider"/>
+      <div class="info-line">ⓘ Thông tin bổ sung:</div>
+      <div class="info-val"><strong>Địa chỉ IP của bạn:</strong>{{ ip }}</div>
+      <div class="info-val" style="margin-top:6px"><strong>Key của bạn:</strong>{{ full_url }}</div>
+    </div>
+
+    <a href="/" class="back">← Quay lại</a>
+  </div>
+
+  <div class="toast" id="toast">✓ Đã sao chép link!</div>
+
+  <script>
+    function copyLink() {
+      const link = document.getElementById('linkText').innerText;
+      navigator.clipboard.writeText(link).then(showToast).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = link; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy');
+        document.body.removeChild(ta); showToast();
+      });
+    }
+    function showToast() {
+      const t = document.getElementById('toast');
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2500);
+    }
+  </script>
+</body>
+</html>

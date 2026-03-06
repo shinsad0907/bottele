@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ppapikey – Key của bạn</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #eef0f8;
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 20px;
+      padding: 36px 30px 30px;
+      width: 100%; max-width: 380px;
+      box-shadow: 0 8px 40px rgba(80,80,140,0.12);
+      animation: fadeUp 0.45s ease both;
+      text-align: center;
+    }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(18px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .logo {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 1.15rem; font-weight: 700; color: #5b5fc7; margin-bottom: 16px;
+    }
+
+    /* Success icon */
+    .icon-wrap {
+      width: 64px; height: 64px; border-radius: 50%;
+      background: linear-gradient(135deg, #5b5fc7, #7c7fdf);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 16px;
+      box-shadow: 0 6px 20px rgba(91,95,199,0.3);
+    }
+    .icon-wrap svg { color: #fff; }
+
+    h1 { font-size: 1.3rem; font-weight: 700; color: #1a1a2e; margin-bottom: 5px; }
+    .subtitle { font-size: 0.85rem; color: #888aab; margin-bottom: 26px; }
+
+    /* Key display box */
+    .key-box {
+      background: #f4f4fd;
+      border: 2px dashed #c5c7f0;
+      border-radius: 14px;
+      padding: 20px 18px;
+      margin-bottom: 16px;
+      position: relative;
+    }
+    .key-label {
+      font-size: 0.75rem; font-weight: 600; color: #888aab;
+      text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px;
+    }
+    .key-value {
+      font-size: 1.45rem; font-weight: 700;
+      color: #5b5fc7; letter-spacing: 0.12em;
+      font-family: 'Courier New', monospace;
+      word-break: break-all;
+    }
+
+    /* Copy button */
+    .btn-copy {
+      width: 100%; border: none; border-radius: 11px;
+      padding: 14px; font-family: 'Inter', sans-serif;
+      font-size: 0.95rem; font-weight: 600;
+      background: #5b5fc7; color: #fff; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: all 0.2s;
+      box-shadow: 0 4px 16px rgba(91,95,199,0.30);
+    }
+    .btn-copy:hover { background: #4a4eb5; transform: translateY(-2px); box-shadow: 0 7px 24px rgba(91,95,199,0.38); }
+    .btn-copy:active { transform: translateY(0); }
+    .btn-copy.copied { background: #22c55e; box-shadow: 0 4px 16px rgba(34,197,94,0.3); }
+
+    /* Info footer */
+    .info {
+      margin-top: 18px; padding-top: 16px;
+      border-top: 1px solid #eee;
+      font-size: 0.8rem; color: #bbb;
+      display: flex; align-items: center; justify-content: center; gap: 5px;
+    }
+    .info span { color: #aaa; font-family: monospace; font-size: 0.82rem; }
+
+    .back { display: inline-block; margin-top: 14px; font-size: 0.82rem; color: #aaa; text-decoration: none; }
+    .back:hover { color: #5b5fc7; }
+
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 28px; left: 50%;
+      transform: translateX(-50%) translateY(60px);
+      background: #22c55e; color: #fff;
+      padding: 11px 24px; border-radius: 50px;
+      font-size: 0.88rem; font-weight: 600;
+      opacity: 0; transition: all 0.3s ease;
+      z-index: 999; white-space: nowrap;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      ppapikey
+    </div>
+
+    <!-- Success icon -->
+    <div class="icon-wrap">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+      </svg>
+    </div>
+
+    <h1>Key của bạn đây!</h1>
+    <p class="subtitle">Sao chép key và dán vào bot</p>
+
+    <!-- Key box -->
+    <div class="key-box">
+      <div class="key-label">🔑 Key kích hoạt</div>
+      <div class="key-value" id="keyValue">{{ key }}</div>
+    </div>
+
+    <!-- Copy button -->
+    <button class="btn-copy" id="copyBtn" onclick="copyKey()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2"/>
+        <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+      </svg>
+      <span id="btnText">Sao Chép Key</span>
+    </button>
+
+    <!-- IP info -->
+    <div class="info">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      IP của bạn: <span>{{ ip }}</span>
+    </div>
+
+    <a href="/" class="back">← Về trang chủ</a>
+  </div>
+
+  <div class="toast" id="toast">✓ Đã sao chép key!</div>
+
+  <script>
+    function copyKey() {
+      const key = document.getElementById('keyValue').innerText;
+      const btn = document.getElementById('copyBtn');
+      const txt = document.getElementById('btnText');
+
+      navigator.clipboard.writeText(key).then(done).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = key; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy');
+        document.body.removeChild(ta); done();
+      });
+
+      function done() {
+        btn.classList.add('copied');
+        txt.textContent = '✓ Đã sao chép!';
+        showToast();
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          txt.textContent = 'Sao Chép Key';
+        }, 2500);
+      }
+    }
+
+    function showToast() {
+      const t = document.getElementById('toast');
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2500);
+    }
+  </script>
+</body>
+</html>
