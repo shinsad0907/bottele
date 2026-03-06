@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
 WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-three.vercel.app").rstrip("/")
-INIT_COINS    = 100000000000000000000000000000000000000000000000000000
+INIT_COINS    = 1000000000000000000000000000000000000000000000000
 BYPASS_REWARD = 20
 COST_IMAGE    = 10
 
@@ -48,15 +48,18 @@ def esc(text: str) -> str:
     return text
 
 def render_cmd(title: str, lines: list, extra: str = "") -> str:
-    """Tạo block kiểu CMD terminal dạng monospace."""
-    bar = "█" * min(len(lines) * 2, 20)
-    body = "\n".join(f"`{l}`" for l in lines[-12:])  # hiện tối đa 12 dòng cuối
-    tail = f"\n\n_{esc(extra)}_" if extra else ""
+    """
+    Render đúng như terminal — dùng ```text code block.
+    Telegram sẽ hiện khung đen + font monospace + nút copy.
+    KHÔNG dùng MarkdownV2, dùng parse_mode="Markdown".
+    """
+    body = "\n".join(lines[-16:])
+    tail = f"\n{extra}" if extra else ""
     return (
-        f"⚡ *{esc(title)}*\n\n"
-        f"`{bar}`\n\n"
-        f"{body}"
-        f"{tail}"
+        f"⚡ {title}\n"
+        f"```text\n"
+        f"{body}{tail}\n"
+        f"```"
     )
 
 def get_user(uid):
@@ -380,7 +383,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             render_cmd("AI IMAGE BOT DANG XU LY...",
                        ["[*] Nhan lenh tao anh...", f"[*] Prompt: {prompt[:40]}"],
                        "Dang khoi dong..."),
-            parse_mode="MarkdownV2"
+            parse_mode="Markdown"
         )
         clear_session(u.id)
 
@@ -416,7 +419,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         try:
                             await msg.edit_text(
                                 render_cmd("AI IMAGE BOT DANG XU LY...", lines),
-                                parse_mode="MarkdownV2"
+                                parse_mode="Markdown"
                             )
                         except:
                             pass
@@ -444,7 +447,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 try:
                     await msg.edit_text(
                         render_cmd("AI IMAGE BOT DANG XU LY...", final_lines),
-                        parse_mode="MarkdownV2"
+                        parse_mode="Markdown"
                     )
                 except: pass
 
@@ -476,7 +479,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Thu Lai",  callback_data="img_start")],
                     [InlineKeyboardButton("🏠 Ve Menu",  callback_data="home")],
-                ]), parse_mode="MarkdownV2"
+                ]), parse_mode="Markdown"
             )
         return
 
