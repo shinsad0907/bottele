@@ -1,16 +1,19 @@
 import supabase
 import uuid
 import requests
-
+import os
 
 class KeyManager:
     def __init__(self):
-        self.supabase_url     = "https://fnqgsliuvsgsxexvsxkl.supabase.co"
-        self.supabase_key     = "sb_secret_APeL51K6QuZKDDKcOAJQdQ_4HovdJCD"
-        self.tokenapivuotlink = "7c84f034b8aca7e6023950224fa2dee5df8edfae"
-        self.client           = supabase.create_client(self.supabase_url, self.supabase_key)
+        self.supabase_url     = os.environ.get("SUPABASE_URL", "https://fnqgsliuvsgsxexvsxkl.supabase.co")
+        self.supabase_key     = os.environ.get("SUPABASE_KEY", "sb_secret_APeL51K6QuZKDDKcOAJQdQ_4HovdJCD") 
+        self.tokenapivuotlink = os.environ.get("VUOTLINK_TOKEN", "7c84f034b8aca7e6023950224fa2dee5df8edfae")
 
-        # Tạo session dùng chung, giả lập trình duyệt thật
+        if not self.supabase_url or not self.supabase_key:
+            raise ValueError("Thieu SUPABASE_URL hoac SUPABASE_KEY trong environment variables!")
+
+        self.client = supabase.create_client(self.supabase_url, self.supabase_key)
+
         self._session = requests.Session()
         self._session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -18,49 +21,40 @@ class KeyManager:
             'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
             'Referer': 'https://vuotlink.vip/',
         })
-        # Ghé trang chủ 1 lần để lấy cookie Cloudflare
         try:
             self._session.get('https://vuotlink.vip/', timeout=10)
         except Exception as e:
-            print(f"[vuotlink] Không thể warm-up session: {e}")
+            print(f"[vuotlink] Khong the warm-up session: {e}")
 
     def _shorten_url(self, long_url, alias='') -> str:
-        """
-        Rút gọn link qua vuotlink.vip.
-        - Nếu là localhost/127.0.0.1 → bỏ qua, trả link gốc luôn
-        - Nếu API lỗi → trả link gốc
-        """
-        API_KEY = '7c84f034b8aca7e6023950224fa2dee5df8edfae'
-    
+        API_KEY = self.tokenapivuotlink
+
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
             'Referer': 'https://vuotlink.vip/',
         }
-        
+
         params = {
             'api': API_KEY,
             'url': long_url,
             'alias': alias
         }
-        
+
         session = requests.Session()
-        # Ghé thăm trang chủ trước để lấy cookie
         session.get('https://vuotlink.vip/', headers=headers)
-        
-        # Sau đó mới gọi API
         res = session.get('https://vuotlink.vip/api', params=params, headers=headers)
-        
+
         print("Status code:", res.status_code)
         print("Response:", res.text)
-        
+
         if res.status_code != 200:
-            raise Exception(f"Bị chặn! Status: {res.status_code}")
-        
+            raise Exception(f"Bi chan! Status: {res.status_code}")
+
         if not res.text.strip():
-            raise Exception("Response rỗng!")
-        
+            raise Exception("Response rong!")
+
         data = res.json()
         if data['status'] == 'success':
             return data['shortenedUrl']
