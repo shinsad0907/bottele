@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
 WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-three.vercel.app").rstrip("/")
-INIT_COINS    = 50
+INIT_COINS    = 1000000000000000000000000000000000000
 BYPASS_REWARD = 20
 COST_IMAGE    = 10
 
@@ -416,3 +416,4 @@ def setup_application(bot_token: str) -> Application:
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     return application
+
