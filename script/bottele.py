@@ -13,7 +13,7 @@ WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-three.vercel.app
 INIT_COINS    = 1000000000000000000000000000000000
 BYPASS_REWARD = 20
 COST_IMAGE    = 10
-COST_VIDEO    = 20   # Chi phí tạo video
+COST_VIDEO    = 20
 
 FIREBASE_KEY = "AIzaSyDkChmbBT5DiK0HNTA8Ffx8NJq7reWkS6I"
 TEMP_DOMAINS = ["getmule.com", "fivemail.com", "vomoto.com", "mailnull.com"]
@@ -47,51 +47,165 @@ keys_db     = {}
 sessions_db = {}
 
 # ══════════════════════════════════════════════
-#  BANNERS
+#  SPLASH ANIMATION FRAMES  —  CLOTHESBOT
 # ══════════════════════════════════════════════
-BANNER_MAIN = """╔═══════════════════════════════════╗
-║   ░█████╗░██╗  ██╗███╗░░██╗██████╗ ║
-║   ██╔══██╗██║  ██║████╗░██║╚════██╗║
-║   ███████║██║  ██║██╔██╗██║░░███╔═╝║
-║   ██╔══██║██║  ██║██║╚████║██╔══╝░░║
-║   ██║░░██║╚██████╔╝██║░╚███║███████╗║
-║   ╚═╝░░╚═╝░╚═════╝░╚═╝░░╚══╝╚══════╝║
-╠═══════════════════════════════════╣
-║        🤖  AI IMAGE STUDIO  🎨     ║
-║   Powered by Advanced Neural Net   ║
-╚═══════════════════════════════════╝"""
 
-BANNER_PROCESSING = """┌─────────────────────────────────┐
-│        🧠  NEURAL ENGINE  ⚡      │
-└─────────────────────────────────┘"""
+# Frame 1 — tối / khởi động
+SPLASH_F1 = """```
+╔══════════════════════════════════════╗
+║                                      ║
+║   ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   ║
+║   ░                               ░  ║
+║   ░   C L O T H E S B O T         ░  ║
+║   ░                               ░  ║
+║   ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   ║
+║                                      ║
+║       [ ĐANG KHỞI ĐỘNG... ]          ║
+║                                      ║
+╚══════════════════════════════════════╝
+```"""
 
-BANNER_VIDEO = """╔══════════════════════════════╗
-║  🎬  PIKA  VIDEO  ENGINE  🎬  ║
-╠══════════════════════════════╣"""
+# Frame 2 — sáng dần / icon xuất hiện
+SPLASH_F2 = """```
+╔══════════════════════════════════════╗
+║  👗                              👗  ║
+║                                      ║
+║  ✨  C L O T H E S B O T  ✨        ║
+║       🎨  STUDIO · TOOLS  🎨        ║
+║                                      ║
+║  👗                              👗  ║
+║  ▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░▓▓  ║
+║       ⚡  LOADING  ⚡               ║
+╚══════════════════════════════════════╝
+```"""
 
-BANNER_WALLET = """╔══════════════════════════════╗
-║  💎  DIAMOND  WALLET  💎   ║
-╠══════════════════════════════╣"""
+# Frame 3 — full ASCII rực rỡ
+SPLASH_F3 = """```
+╔══════════════════════════════════════╗
+║ 🔥✨🔥✨🔥✨🔥✨🔥✨🔥✨🔥✨🔥✨🔥 ║
+║                                      ║
+║  ██████╗██╗      ██████╗ ████████╗  ║
+║ ██╔════╝██║     ██╔═══██╗╚══██╔══╝  ║
+║ ██║     ██║     ██║   ██║   ██║     ║
+║ ██║     ██║     ██║   ██║   ██║     ║
+║ ╚██████╗███████╗╚██████╔╝   ██║     ║
+║  ╚═════╝╚══════╝ ╚═════╝    ╚═╝     ║
+║                                      ║
+║   👗 H E S B O T  ·  STUDIO 👗      ║
+║                                      ║
+║ ✨🔥✨🔥✨🔥✨🔥✨🔥✨🔥✨🔥✨🔥✨ ║
+╚══════════════════════════════════════╝
+```"""
 
-BANNER_BYPASS = """╔══════════════════════════════╗
-║  🔗  EARN  COINS  FAST  💰  ║
-╠══════════════════════════════╣"""
+# Frame 4 — màn hình chính
+def splash_final(name: str, coins: int, total_images: int,
+                 total_bypassed: int, total_videos: int = 0) -> str:
+    bar   = coin_bar(coins)
+    badge = rank_badge(coins)
+    return (
+        "```\n"
+        "╔══════════════════════════════════════╗\n"
+        "║ 👗✨━━━━━━━━━━━━━━━━━━━━━━━━━━✨👗 ║\n"
+        "║                                      ║\n"
+        "║    ██████╗██╗      ██████╗ ████████╗ ║\n"
+        "║   ██╔════╝██║     ██╔═══██╗╚══██╔══╝ ║\n"
+        "║   ██║     ██║     ██║   ██║   ██║    ║\n"
+        "║   ╚██████╗███████╗╚██████╔╝   ██║    ║\n"
+        "║    ╚═════╝╚══════╝ ╚═════╝    ╚═╝    ║\n"
+        "║                                      ║\n"
+        "║    👗  H E S B O T  ·  STUDIO  👗    ║\n"
+        "║                                      ║\n"
+        "║ 👗✨━━━━━━━━━━━━━━━━━━━━━━━━━━✨👗 ║\n"
+        "╚══════════════════════════════════════╝\n"
+        "```\n\n"
+        f"👋 Xin chào, *{esc(name)}*\\!\n\n"
+        f"┌─ 📊 *THÔNG TIN TÀI KHOẢN* ──┐\n"
+        f"│  {badge}\n"
+        f"│  💰 Xu: `{coins}` {bar}\n"
+        f"│  🎨 Ảnh đã tạo:   `{total_images}`\n"
+        f"│  🎬 Video đã tạo: `{total_videos}`\n"
+        f"│  🔗 Lượt kiếm xu: `{total_bypassed}`\n"
+        f"└────────────────────────────────┘\n\n"
+        f"⚡ Chi phí tạo ảnh: `{COST_IMAGE} xu / lần`\n"
+        f"🎬 Chi phí tạo video: `{COST_VIDEO} xu / lần`\n"
+        f"🎁 Thưởng mỗi link: `+{BYPASS_REWARD} xu`\n\n"
+        f"👇 *Chọn tính năng bên dưới:*"
+    )
 
-BANNER_SUCCESS = """╔══════════════════════════════╗
-║  ✅  TRANSACTION  COMPLETE  ║
-╠══════════════════════════════╣"""
+# ══════════════════════════════════════════════
+#  ANIMATED LOADING  —  icon xoay + progress
+# ══════════════════════════════════════════════
+IMG_ICONS = ["👗", "✨", "🎨", "💫", "🌀", "⚡", "🔮", "🧵"]
+VID_ICONS = ["🎬", "👗", "✨", "🌀", "🎞️", "💫", "⚡", "🎥"]
 
-BANNER_ERROR = """╔══════════════════════════════╗
-║  ⚠️   SYSTEM  ALERT  ⚠️    ║
-╠══════════════════════════════╣"""
+# Spinner dots
+SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-PROGRESS_BLOCKS = ["░░░░░░░░░░","█░░░░░░░░░","██░░░░░░░░","███░░░░░░░","████░░░░░░",
-                   "█████░░░░░","██████░░░░","███████░░░","████████░░","█████████░","██████████"]
+PROGRESS_BLOCKS = [
+    "░░░░░░░░░░", "█░░░░░░░░░", "██░░░░░░░░", "███░░░░░░░",
+    "████░░░░░░", "█████░░░░░", "██████░░░░", "███████░░░",
+    "████████░░", "█████████░", "██████████"
+]
 
 def progress_bar(step: int, total: int = 10) -> str:
     idx = min(int(step / total * 10), 10)
     pct = int(step / total * 100)
     return f"{PROGRESS_BLOCKS[idx]} {pct}%"
+
+def render_log_step(step: int, total_steps: int, lines: list,
+                    eta: str = "", tick: int = 0) -> str:
+    bar    = progress_bar(step, total_steps)
+    icon   = IMG_ICONS[tick % len(IMG_ICONS)]
+    spin   = SPINNER[tick % len(SPINNER)]
+    body   = "\n".join(lines[-12:])
+    eta_line = f"\n  {spin} ETA: {eta}" if eta else ""
+    return (
+        f"```\n"
+        f"╔══ {icon} CLOTHESBOT · PROCESSING {icon} ══╗\n"
+        f"║  {bar}\n"
+        f"╠══════════════════════════════════════╣\n"
+        f"{body}\n"
+        f"╚══════════════════════════════════════╝"
+        f"{eta_line}"
+        f"\n```"
+    )
+
+def render_video_log(step: int, total_steps: int, lines: list,
+                     eta: str = "", tick: int = 0) -> str:
+    bar    = progress_bar(step, total_steps)
+    icon   = VID_ICONS[tick % len(VID_ICONS)]
+    spin   = SPINNER[tick % len(SPINNER)]
+    body   = "\n".join(lines[-12:])
+    eta_line = f"\n  {spin} ETA: {eta}" if eta else ""
+    return (
+        f"```\n"
+        f"╔══ {icon} CLOTHESBOT · RENDERING {icon} ══╗\n"
+        f"║  {bar}\n"
+        f"╠══════════════════════════════════════╣\n"
+        f"{body}\n"
+        f"╚══════════════════════════════════════╝"
+        f"{eta_line}"
+        f"\n```"
+    )
+
+# ══════════════════════════════════════════════
+#  BANNERS  (static)
+# ══════════════════════════════════════════════
+BANNER_WALLET = """╔══════════════════════════════════════╗
+║  💎  CLOTHESBOT  ·  WALLET  💎      ║
+╠══════════════════════════════════════╣"""
+
+BANNER_BYPASS = """╔══════════════════════════════════════╗
+║  🔗  CLOTHESBOT  ·  EARN COINS  💰  ║
+╠══════════════════════════════════════╣"""
+
+BANNER_SUCCESS = """╔══════════════════════════════════════╗
+║  ✅  CLOTHESBOT  ·  SUCCESS  ✅     ║
+╠══════════════════════════════════════╣"""
+
+BANNER_ERROR = """╔══════════════════════════════════════╗
+║  ⚠️   CLOTHESBOT  ·  ERROR   ⚠️    ║
+╠══════════════════════════════════════╣"""
 
 # ══════════════════════════════════════════════
 #  HELPERS
@@ -100,36 +214,6 @@ def esc(text: str) -> str:
     for ch in r'\_*[]()~`>#+-=|{}.!':
         text = text.replace(ch, f'\\{ch}')
     return text
-
-def render_log_step(step: int, total_steps: int, lines: list, eta: str = "") -> str:
-    bar = progress_bar(step, total_steps)
-    body = "\n".join(lines[-14:])
-    eta_line = f"\n  ⏱ ETA: {eta}" if eta else ""
-    return (
-        f"```\n"
-        f"╔══ 🧠 NEURAL PROCESSING ENGINE ══╗\n"
-        f"║  {bar}\n"
-        f"╠══════════════════════════════════╣\n"
-        f"{body}\n"
-        f"╚══════════════════════════════════╝"
-        f"{eta_line}"
-        f"\n```"
-    )
-
-def render_video_log(step: int, total_steps: int, lines: list, eta: str = "") -> str:
-    bar = progress_bar(step, total_steps)
-    body = "\n".join(lines[-14:])
-    eta_line = f"\n  ⏱ ETA: {eta}" if eta else ""
-    return (
-        f"```\n"
-        f"╔══ 🎬 PIKA VIDEO ENGINE ══╗\n"
-        f"║  {bar}\n"
-        f"╠══════════════════════════════════╣\n"
-        f"{body}\n"
-        f"╚══════════════════════════════════╝"
-        f"{eta_line}"
-        f"\n```"
-    )
 
 def get_user(uid):
     uid = str(uid)
@@ -153,6 +237,16 @@ def get_session(uid):
     return sessions_db[uid]
 
 def clear_session(uid):
+    """Xóa state/flow nhưng GIỮ LẠI last_image_bytes và last_image_name."""
+    uid = str(uid)
+    preserved = {}
+    if uid in sessions_db:
+        for key in ("last_image_bytes", "last_image_name"):
+            if key in sessions_db[uid]:
+                preserved[key] = sessions_db[uid][key]
+    sessions_db[uid] = preserved
+
+def full_clear_session(uid):
     sessions_db[str(uid)] = {}
 
 def new_key(uid):
@@ -181,7 +275,39 @@ def rank_badge(coins: int) -> str:
     return "🥉 BRONZE"
 
 # ══════════════════════════════════════════════
-#  PIKA VIDEO API
+#  ANIMATED SPLASH
+# ══════════════════════════════════════════════
+async def animated_splash(message_obj, u, user):
+    """3 frame động → màn hình chính."""
+    m = await message_obj.reply_text(SPLASH_F1, parse_mode="Markdown")
+    await asyncio.sleep(0.55)
+
+    try: await m.edit_text(SPLASH_F2, parse_mode="Markdown")
+    except: pass
+    await asyncio.sleep(0.55)
+
+    try: await m.edit_text(SPLASH_F3, parse_mode="Markdown")
+    except: pass
+    await asyncio.sleep(0.65)
+
+    final_text = splash_final(
+        u.first_name or "bạn",
+        user["coins"],
+        user.get("total_images", 0),
+        user.get("total_bypassed", 0),
+        user.get("total_videos", 0),
+    )
+    try:
+        await m.edit_text(
+            final_text,
+            reply_markup=kb_main(user["coins"]),
+            parse_mode="MarkdownV2"
+        )
+    except: pass
+    return m
+
+# ══════════════════════════════════════════════
+#  VIDEO API  (internal)
 # ══════════════════════════════════════════════
 def _mailtm_create_account():
     domain = requests.get(f"{MAILTM}/domains", timeout=10).json()["hydra:member"][0]["domain"]
@@ -366,7 +492,6 @@ def _pika_poll_video(access_token, sb_cookie, job_id, timeout=300, interval=10):
             )
             if resp.status_code == 200:
                 raw = resp.text
-                # Check result
                 for line in raw.split("\n"):
                     line = line.strip()
                     if not line: continue
@@ -387,12 +512,10 @@ def _pika_poll_video(access_token, sb_cookie, job_id, timeout=300, interval=10):
                                         return url
                         except:
                             pass
-                # Fallback regex
                 for pat in [r'"resultUrl"\s*:\s*"(https://[^"]+\.mp4)"',
                              r'"sharingUrl"\s*:\s*"(https://[^"]+\.mp4)"']:
                     m = re.search(pat, raw)
                     if m: return m.group(1)
-                # Check failed status
                 m = re.search(r'"status"\s*:\s*"([^"]+)"', raw)
                 if m and m.group(1) in ("failed", "error", "cancelled"):
                     raise Exception(f"Job thất bại: {m.group(1)}")
@@ -407,7 +530,6 @@ def _pika_poll_video(access_token, sb_cookie, job_id, timeout=300, interval=10):
 def pika_create_account_and_generate(image_bytes: bytes, filename: str,
                                      prompt: str = "gentle movement",
                                      log_cb=None):
-    """Full flow: tạo tài khoản Pika mới → generate video → trả về URL mp4."""
     lines = []
     step_c = [0]
 
@@ -418,15 +540,14 @@ def pika_create_account_and_generate(image_bytes: bytes, filename: str,
             try: log_cb(list(lines), step_c[0])
             except: pass
 
-    push(f"  ◈ Prompt: {prompt[:30]}", 0)
-    push(f"  ◈ Model : Pika 2.5 | 480p | 5s", 0)
+    push(f"  ◈ Prompt : {prompt[:30]}", 0)
+    push(f"  ◈ Output : 🎬 480p | ⏱ 5 giây", 0)
     push(f"  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄", 0)
     push(f"  [01/06] 📧 Tạo email tạm...")
-
     mt = _mailtm_create_account()
     push(f"  [01/06] ✅ Email: {mt['email'][:25]}")
 
-    push(f"  [02/06] 📝 Đăng ký tài khoản Pika...")
+    push(f"  [02/06] 🔧 Khởi tạo phiên xử lý...")
     rnd_name  = ''.join(random.choices(string.ascii_lowercase, k=8))
     pika_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=10)) + "Aa1!"
     sess = requests.Session()
@@ -446,36 +567,35 @@ def pika_create_account_and_generate(image_bytes: bytes, filename: str,
     vr.get(verify_url, allow_redirects=True, timeout=20)
     push(f"  [03/06] ✅ Xác nhận email OK")
 
-    push(f"  [04/06] 🔐 Đăng nhập Pika...")
+    push(f"  [04/06] 🔐 Xác thực hệ thống...")
     lr = _pika_login(mt["email"], pika_pass)
     if not lr.get("access_token"):
-        raise Exception("Đăng nhập Pika thất bại")
-    push(f"  [04/06] ✅ Đăng nhập thành công!")
+        raise Exception("Xác thực thất bại")
+    push(f"  [04/06] ✅ Xác thực thành công!")
 
-    push(f"  [05/06] 🎬 Gửi yêu cầu render video...")
+    push(f"  [05/06] 🎬 Gửi yêu cầu render...")
     job_id = _pika_generate_job(
         lr["access_token"], lr["user_id"],
         image_bytes, filename, prompt=prompt
     )
     push(f"  [05/06] ✅ Job ID: {job_id[:8]}...")
 
-    push(f"  [06/06] ⏳ Chờ render (có thể mất ~2-5 phút)...")
+    push(f"  [06/06] ⏳ Đang render (~2-5 phút)...")
     time.sleep(20)
     video_url = _pika_poll_video(
         lr["access_token"], lr["sb_cookie"], job_id,
         timeout=300, interval=10
     )
-    push(f"  [06/06] ✅ Video sẵn sàng!")
+    push(f"  [06/06] ✅ 🎬 Video sẵn sàng!")
     push(f"  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄", 0)
-    push(f"  🎉 Tải video về...", 0)
-
+    push(f"  📥 Đang tải video về...", 0)
     vresp = requests.get(video_url, timeout=180, stream=True)
     video_bytes = b"".join(vresp.iter_content(chunk_size=8192))
-    push(f"  ✅ {len(video_bytes)//1024} KB — Hoàn tất!", 0)
+    push(f"  ✅ {len(video_bytes)//1024} KB — 🎉 Hoàn tất!", 0)
     return video_bytes, video_url
 
 # ══════════════════════════════════════════════
-#  AI IMAGE API
+#  IMAGE API
 # ══════════════════════════════════════════════
 def random_email():
     rnd = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
@@ -516,10 +636,9 @@ def generate_image(image_bytes: bytes, filename: str, prompt: str,
 
     push(f"  ◈ Target  : {filename[:22]}", 0)
     push(f"  ◈ Prompt  : {prompt[:28]}...", 0)
-    push(f"  ◈ Model   : Neural v3.0", 0)
+    push(f"  ◈ 👗 CLOTHESBOT Engine Ready", 0)
     push(f"  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄", 0)
     push(f"  [01/07] 🔐 Initializing engine...")
-
     email, token = create_account()
     push(f"  [02/07] ✅ Auth OK → {email[:20]}")
 
@@ -539,7 +658,7 @@ def generate_image(image_bytes: bytes, filename: str, prompt: str,
         raise Exception(f"Upload failed {up.status_code}")
     push(f"  [04/07] ✅ HTTP {up.status_code} — Upload accepted!")
 
-    push(f"  [05/07] 🧠 Sending to AI neural net...")
+    push(f"  [05/07] 👗 ✨ Processing outfit...")
     inf = requests.post("https://sv.aivideo123.site/api/item/inference2",
         headers=headers,
         json={"s3_path": s3_key, "mask_path": "", "prompt": prompt, "ai_model_type": 3},
@@ -548,7 +667,7 @@ def generate_image(image_bytes: bytes, filename: str, prompt: str,
     item_uid  = inf["data"]["item"]["uid"]
     time_need = inf["data"]["item"]["time_need"]
     push(f"  [05/07] ✅ Job queued! ETA: {time_need}s")
-    push(f"  [06/07] ⚡ Processing... please wait")
+    push(f"  [06/07] ✨ Styling... please wait")
     time.sleep(time_need)
 
     push(f"  [07/07] 📥 Fetching result...")
@@ -564,25 +683,25 @@ def generate_image(image_bytes: bytes, filename: str, prompt: str,
     push(f"  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄", 0)
     push(f"  ✨ Downloading final image...", 0)
     img_resp = requests.get(result_url, timeout=20)
-    push(f"  🎉 COMPLETE! Sending to you...", 0)
+    push(f"  🎉 CLOTHESBOT · COMPLETE!", 0)
     return img_resp.content
 
 # ══════════════════════════════════════════════
 #  KEYBOARDS
 # ══════════════════════════════════════════════
-def kb_main(coins: int, username: str = ""):
+def kb_main(coins: int):
     badge = rank_badge(coins)
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━", callback_data="noop")],
-        [InlineKeyboardButton("🎨  Tạo Ảnh AI  ✨",   callback_data="img_start")],
-        [InlineKeyboardButton("🎬  Tạo Video AI  ✨",  callback_data="vid_start")],
-        [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━", callback_data="noop")],
-        [InlineKeyboardButton("💎 Ví Xu",             callback_data="balance"),
-         InlineKeyboardButton("🔗 Kiếm Xu",           callback_data="bypass")],
-        [InlineKeyboardButton("📊 Thống Kê",          callback_data="stats"),
-         InlineKeyboardButton("📖 Hướng Dẫn",         callback_data="help")],
-        [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━", callback_data="noop")],
-        [InlineKeyboardButton(f"{badge}  •  💰 {coins} xu", callback_data="balance")],
+        [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
+        [InlineKeyboardButton("🎨 ✨  TẠO ẢNH  ✨ 🎨",     callback_data="img_start")],
+        [InlineKeyboardButton("🎬 ✨  TẠO VIDEO  ✨ 🎬",    callback_data="vid_start")],
+        [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
+        [InlineKeyboardButton("💎 Ví Xu",                   callback_data="balance"),
+         InlineKeyboardButton("🔗 Kiếm Xu",                 callback_data="bypass")],
+        [InlineKeyboardButton("📊 Thống Kê",                callback_data="stats"),
+         InlineKeyboardButton("📖 Hướng Dẫn",               callback_data="help")],
+        [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
+        [InlineKeyboardButton(f"{badge}  •  💰 {coins} xu",  callback_data="balance")],
     ])
 
 def kb_back():
@@ -596,54 +715,33 @@ def kb_cancel():
     ])
 
 def kb_after_image(coins: int):
-    """Sau khi tạo ảnh xong — có thêm nút tạo video từ ảnh này."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎬 Tạo Video Từ Ảnh Này!", callback_data="vid_from_last_image")],
-        [InlineKeyboardButton("🎨 Tạo Ảnh Mới",         callback_data="img_start"),
-         InlineKeyboardButton("🏠 Menu Chính",           callback_data="home")],
-        [InlineKeyboardButton(f"💰 Còn lại: {coins} xu", callback_data="balance")],
+        [InlineKeyboardButton("🎬 ✨ Tạo Video Từ Ảnh Này!", callback_data="vid_from_last_image")],
+        [InlineKeyboardButton("🎨 Tạo Ảnh Mới",             callback_data="img_start"),
+         InlineKeyboardButton("🏠 Menu Chính",               callback_data="home")],
+        [InlineKeyboardButton(f"💰 Còn lại: {coins} xu",     callback_data="balance")],
     ])
 
 def kb_after_video(coins: int):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎬 Tạo Video Mới",       callback_data="vid_start"),
-         InlineKeyboardButton("🎨 Tạo Ảnh Mới",         callback_data="img_start")],
-        [InlineKeyboardButton("🏠 Menu Chính",           callback_data="home")],
-        [InlineKeyboardButton(f"💰 Còn lại: {coins} xu", callback_data="balance")],
+        [InlineKeyboardButton("🎬 Tạo Video Mới",            callback_data="vid_start"),
+         InlineKeyboardButton("🎨 Tạo Ảnh Mới",             callback_data="img_start")],
+        [InlineKeyboardButton("🏠 Menu Chính",               callback_data="home")],
+        [InlineKeyboardButton(f"💰 Còn lại: {coins} xu",     callback_data="balance")],
     ])
 
 def kb_after_key(coins: int):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎨 Tạo Ảnh Ngay!",     callback_data="img_start"),
-         InlineKeyboardButton("🎬 Tạo Video Ngay!",    callback_data="vid_start")],
-        [InlineKeyboardButton("🔗 Kiếm Thêm Xu",       callback_data="bypass"),
-         InlineKeyboardButton("🏠 Menu",                callback_data="home")],
-        [InlineKeyboardButton(f"💰 Số dư: {coins} xu", callback_data="balance")],
+        [InlineKeyboardButton("🎨 Tạo Ảnh Ngay!",           callback_data="img_start"),
+         InlineKeyboardButton("🎬 Tạo Video Ngay!",          callback_data="vid_start")],
+        [InlineKeyboardButton("🔗 Kiếm Thêm Xu",             callback_data="bypass"),
+         InlineKeyboardButton("🏠 Menu",                     callback_data="home")],
+        [InlineKeyboardButton(f"💰 Số dư: {coins} xu",       callback_data="balance")],
     ])
 
 # ══════════════════════════════════════════════
 #  MESSAGE BUILDERS
 # ══════════════════════════════════════════════
-def msg_home(name: str, coins: int, total_images: int, total_bypassed: int,
-             total_videos: int = 0) -> str:
-    bar = coin_bar(coins)
-    badge = rank_badge(coins)
-    return (
-        f"```\n{BANNER_MAIN}\n```\n\n"
-        f"👋 Xin chào, *{esc(name)}*\\!\n\n"
-        f"┌─ 📊 *THÔNG TIN TÀI KHOẢN* ─┐\n"
-        f"│  {badge}\n"
-        f"│  💰 Xu: `{coins}` {bar}\n"
-        f"│  🎨 Ảnh đã tạo: `{total_images}`\n"
-        f"│  🎬 Video đã tạo: `{total_videos}`\n"
-        f"│  🔗 Lượt kiếm xu: `{total_bypassed}`\n"
-        f"└──────────────────────────────┘\n\n"
-        f"⚡ Chi phí tạo ảnh: `{COST_IMAGE} xu / lần`\n"
-        f"🎬 Chi phí tạo video: `{COST_VIDEO} xu / lần`\n"
-        f"🎁 Thưởng mỗi link: `+{BYPASS_REWARD} xu`\n\n"
-        f"👇 *Chọn tính năng bên dưới:*"
-    )
-
 def msg_balance(full_name: str, uid: int, coins: int, total_images: int,
                 total_bypassed: int, total_videos: int = 0) -> str:
     bar = coin_bar(coins)
@@ -654,18 +752,18 @@ def msg_balance(full_name: str, uid: int, coins: int, total_images: int,
         f"```\n{BANNER_WALLET}\n```\n\n"
         f"👤 *{esc(full_name or 'User')}*\n"
         f"🆔 ID: `{uid}`\n\n"
-        f"┌─ 💎 *SỐ DƯ* ───────────────┐\n"
+        f"┌─ 💎 *SỐ DƯ* ────────────────┐\n"
         f"│  {badge}\n"
         f"│  💰 Xu hiện có: `{coins} xu`\n"
         f"│  {bar}\n"
-        f"└────────────────────────────┘\n\n"
-        f"┌─ 📈 *LỊCH SỬ GIAO DỊCH* ──┐\n"
-        f"│  🎨 Ảnh đã tạo: `{total_images}` lần\n"
+        f"└──────────────────────────────┘\n\n"
+        f"┌─ 📈 *LỊCH SỬ GIAO DỊCH* ────┐\n"
+        f"│  🎨 Ảnh đã tạo:   `{total_images}` lần\n"
         f"│  🎬 Video đã tạo: `{total_videos}` lần\n"
-        f"│  💸 Đã chi:     `{spent} xu`\n"
-        f"│  🔗 Đã kiếm:   `{total_bypassed}` lần\n"
-        f"│  💵 Tổng nhận:  `{earned + INIT_COINS} xu`\n"
-        f"└────────────────────────────┘"
+        f"│  💸 Đã chi:       `{spent} xu`\n"
+        f"│  🔗 Đã kiếm:     `{total_bypassed}` lần\n"
+        f"│  💵 Tổng nhận:    `{earned + INIT_COINS} xu`\n"
+        f"└──────────────────────────────┘"
     )
 
 def msg_bypass(link: str) -> str:
@@ -685,30 +783,30 @@ def msg_bypass(link: str) -> str:
 
 def msg_help() -> str:
     return (
-        f"📖 *HƯỚNG DẪN SỬ DỤNG*\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎨 *TẠO ẢNH AI*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"1\\. Bấm `🎨 Tạo Ảnh AI`\n"
+        f"📖 *CLOTHESBOT · HƯỚNG DẪN*\n\n"
+        f"👗✨━━━━━━━━━━━━━━━━━━━━━✨👗\n"
+        f"🎨 ✨ *TẠO ẢNH*\n"
+        f"👗✨━━━━━━━━━━━━━━━━━━━━━✨👗\n"
+        f"1\\. Bấm `🎨 ✨ Tạo Ảnh`\n"
         f"2\\. Gửi ảnh gốc của bạn\n"
         f"3\\. Nhập mô tả \\(prompt\\) bằng tiếng Anh\n"
-        f"4\\. Đợi AI xử lý \\(~20\\-40 giây\\)\n"
+        f"4\\. Đợi hệ thống xử lý \\(~20\\-40 giây\\)\n"
         f"💰 Chi phí: `{COST_IMAGE} xu` / lần\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎬 *TẠO VIDEO AI \\(PIKA 2\\.5\\)*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"1\\. Bấm `🎬 Tạo Video AI` hoặc sau khi tạo ảnh\n"
+        f"👗✨━━━━━━━━━━━━━━━━━━━━━✨👗\n"
+        f"🎬 ✨ *TẠO VIDEO*\n"
+        f"👗✨━━━━━━━━━━━━━━━━━━━━━✨👗\n"
+        f"1\\. Bấm `🎬 ✨ Tạo Video` hoặc sau khi tạo ảnh\n"
         f"2\\. Gửi ảnh muốn chuyển thành video\n"
         f"3\\. Nhập mô tả chuyển động bằng tiếng Anh\n"
         f"4\\. Đợi render \\(~2\\-5 phút\\)\n"
-        f"💰 Chi phí: `{COST_VIDEO} xu` / lần\n"
-        f"💡 Ví dụ prompt video:\\n"
+        f"💰 Chi phí: `{COST_VIDEO} xu` / lần\n\n"
+        f"💡 Ví dụ prompt:\n"
         f"  `gentle swaying motion`\n"
         f"  `hair blowing in the wind`\n"
         f"  `slow zoom in`\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👗✨━━━━━━━━━━━━━━━━━━━━━✨👗\n"
         f"🔗 *KIẾM XU MIỄN PHÍ*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👗✨━━━━━━━━━━━━━━━━━━━━━✨👗\n"
         f"1\\. Bấm `🔗 Kiếm Xu`\n"
         f"2\\. Vào link được cấp\n"
         f"3\\. Hoàn thành bước trên web\n"
@@ -721,20 +819,20 @@ def msg_stats(uid: int, coins: int, total_images: int, total_bypassed: int,
     rank = rank_badge(coins)
     spent = total_images * COST_IMAGE + total_videos * COST_VIDEO
     return (
-        f"📊 *THỐNG KÊ CÁ NHÂN*\n\n"
+        f"📊 *CLOTHESBOT · THỐNG KÊ*\n\n"
         f"🆔 ID: `{uid}`\n"
         f"🏆 Hạng: *{rank}*\n\n"
-        f"┌─ 💰 *COINS* ───────────────┐\n"
+        f"┌─ 💰 *COINS* ─────────────────┐\n"
         f"│  Hiện có:   `{coins} xu`\n"
         f"│  {coin_bar(coins)}\n"
         f"│  Đã kiếm:   `{total_bypassed * BYPASS_REWARD + INIT_COINS} xu` tổng\n"
         f"│  Đã tiêu:   `{spent} xu`\n"
-        f"└────────────────────────────┘\n\n"
-        f"┌─ 🎨 *HOẠT ĐỘNG* ───────────┐\n"
-        f"│  Ảnh đã tạo:    `{total_images}` lần\n"
-        f"│  Video đã tạo:  `{total_videos}` lần\n"
-        f"│  Link đã dùng:  `{total_bypassed}` lần\n"
-        f"└────────────────────────────┘"
+        f"└──────────────────────────────┘\n\n"
+        f"┌─ 👗 *HOẠT ĐỘNG* ─────────────┐\n"
+        f"│  🎨 Ảnh đã tạo:   `{total_images}` lần\n"
+        f"│  🎬 Video đã tạo: `{total_videos}` lần\n"
+        f"│  🔗 Link đã dùng: `{total_bypassed}` lần\n"
+        f"└──────────────────────────────┘"
     )
 
 # ══════════════════════════════════════════════
@@ -743,14 +841,8 @@ def msg_stats(uid: int, coins: int, total_images: int, total_bypassed: int,
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u    = update.effective_user
     user = get_user(u.id)
-    clear_session(u.id)
-    await update.message.reply_text(
-        msg_home(u.first_name or "bạn", user["coins"],
-                 user.get("total_images", 0), user.get("total_bypassed", 0),
-                 user.get("total_videos", 0)),
-        reply_markup=kb_main(user["coins"], u.first_name or ""),
-        parse_mode="MarkdownV2"
-    )
+    full_clear_session(u.id)
+    await animated_splash(update.message, u, user)
 
 async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query
@@ -764,13 +856,15 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Home ──
     if d == "home":
-        clear_session(u.id)
+        full_clear_session(u.id)
         user = get_user(u.id)
         await q.edit_message_text(
-            msg_home(u.first_name or "bạn", user["coins"],
-                     user.get("total_images", 0), user.get("total_bypassed", 0),
-                     user.get("total_videos", 0)),
-            reply_markup=kb_main(user["coins"], u.first_name or ""),
+            splash_final(
+                u.first_name or "bạn", user["coins"],
+                user.get("total_images", 0), user.get("total_bypassed", 0),
+                user.get("total_videos", 0),
+            ),
+            reply_markup=kb_main(user["coins"]),
             parse_mode="MarkdownV2"
         ); return
 
@@ -834,16 +928,18 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ]), parse_mode="MarkdownV2"
             ); return
         sess["state"] = "wait_photo"
+        sess.pop("photo_id", None)
+        sess.pop("photo_name", None)
         await q.edit_message_text(
-            f"🎨 *TẠO ẢNH AI*\n\n"
-            f"```\n  Số dư:    {user['coins']} xu\n  Chi phí:  {COST_IMAGE} xu / lần\n  Sau khi:  {user['coins'] - COST_IMAGE} xu\n```\n\n"
+            f"🎨 ✨ *TẠO ẢNH*\n\n"
+            f"```\n  💰 Số dư:   {user['coins']} xu\n  💸 Chi phí: {COST_IMAGE} xu / lần\n  📊 Sau khi: {user['coins'] - COST_IMAGE} xu\n```\n\n"
             f"📸 *BƯỚC 1 / 2*\n"
             f"Gửi ảnh bạn muốn chỉnh sửa:\n\n"
             f"• Ảnh rõ nét, đủ sáng\n• Gửi trực tiếp \\(không qua file\\)\n• Tối đa 5MB",
             reply_markup=kb_cancel(), parse_mode="MarkdownV2"
         ); return
 
-    # ── Start Video (fresh) ──
+    # ── Start Video ──
     if d == "vid_start":
         if user["coins"] < COST_VIDEO:
             await q.edit_message_text(
@@ -856,25 +952,31 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ]), parse_mode="MarkdownV2"
             ); return
         sess["state"] = "wait_video_photo"
+        sess.pop("video_photo_id",    None)
+        sess.pop("video_photo_bytes", None)
+        sess.pop("video_photo_name",  None)
         await q.edit_message_text(
-            f"🎬 *TẠO VIDEO AI \\(PIKA 2\\.5\\)*\n\n"
-            f"```\n  Số dư:    {user['coins']} xu\n  Chi phí:  {COST_VIDEO} xu / lần\n  Output:   Video 480p 5 giây\n```\n\n"
+            f"🎬 ✨ *TẠO VIDEO*\n\n"
+            f"```\n  💰 Số dư:   {user['coins']} xu\n  💸 Chi phí: {COST_VIDEO} xu / lần\n  🎞️  Output:  480p | 5 giây\n```\n\n"
             f"📸 *BƯỚC 1 / 2*\n"
             f"Gửi ảnh bạn muốn chuyển thành video:\n\n"
             f"• Ảnh rõ nét, đủ sáng\n"
             f"• Gửi trực tiếp \\(không qua file\\)\n"
-            f"• Pika hoạt động tốt nhất với ảnh người/cảnh vật",
+            f"• Hoạt động tốt nhất với ảnh người hoặc cảnh vật",
             reply_markup=kb_cancel(), parse_mode="MarkdownV2"
         ); return
 
     # ── Video từ ảnh vừa tạo ──
     if d == "vid_from_last_image":
-        last_img = sess.get("last_image_bytes")
+        last_img  = sess.get("last_image_bytes")
         last_name = sess.get("last_image_name", "image.jpg")
         if not last_img:
             await q.edit_message_text(
                 "❌ Không tìm thấy ảnh vừa tạo\\. Vui lòng tạo ảnh trước\\!",
-                reply_markup=kb_back(), parse_mode="MarkdownV2"
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎨 ✨ Tạo Ảnh",  callback_data="img_start")],
+                    [InlineKeyboardButton("🏠 Menu",        callback_data="home")],
+                ]), parse_mode="MarkdownV2"
             ); return
         if user["coins"] < COST_VIDEO:
             await q.edit_message_text(
@@ -885,13 +987,12 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("🏠 Menu",     callback_data="home")],
                 ]), parse_mode="MarkdownV2"
             ); return
-        # Lưu ảnh vào session video
-        sess["state"]            = "wait_video_prompt"
+        sess["state"]             = "wait_video_prompt"
         sess["video_photo_bytes"] = last_img
         sess["video_photo_name"]  = last_name
         await q.edit_message_text(
-            f"🎬 *TẠO VIDEO TỪ ẢNH VỪA TẠO*\n\n"
-            f"```\n  Chi phí: {COST_VIDEO} xu\n  Sau khi: {user['coins'] - COST_VIDEO} xu\n```\n\n"
+            f"🎬 ✨ *TẠO VIDEO TỪ ẢNH VỪA TẠO*\n\n"
+            f"```\n  💸 Chi phí: {COST_VIDEO} xu\n  📊 Sau khi: {user['coins'] - COST_VIDEO} xu\n  🎞️  Output:  480p | 5 giây\n```\n\n"
             f"✏️ *BƯỚC 2 / 2 — Nhập mô tả chuyển động:*\n\n"
             f"💡 Ví dụ:\n"
             f"`gentle swaying motion`\n"
@@ -901,7 +1002,6 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb_cancel(), parse_mode="MarkdownV2"
         ); return
 
-    # ── Help ──
     if d == "help":
         await q.edit_message_text(
             msg_help(), reply_markup=kb_back(), parse_mode="MarkdownV2"
@@ -911,23 +1011,21 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  PHOTO HANDLER
 # ══════════════════════════════════════════════
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    u    = update.effective_user
-    sess = get_session(u.id)
+    u     = update.effective_user
+    sess  = get_session(u.id)
     state = sess.get("state")
-
     photo = update.message.photo[-1]
 
-    # ── Ảnh cho image generation ──
     if state == "wait_photo":
         sess["photo_id"]   = photo.file_id
         sess["photo_name"] = f"photo_{photo.file_id[:8]}.jpg"
         sess["state"]      = "wait_prompt"
         await update.message.reply_text(
             "✅ *ĐÃ NHẬN ẢNH\\!*\n\n"
-            "```\n  [✓] Ảnh đã được tải lên\n  [✓] Kích thước OK\n  [✓] Định dạng OK\n```\n\n"
+            "```\n  [✓] Ảnh đã tải lên\n  [✓] Kích thước OK\n  [✓] Định dạng OK\n```\n\n"
             "✏️ *BƯỚC 2 / 2*\n"
-            "Nhập mô tả bạn muốn AI thực hiện:\n\n"
-            "💡 *Ví dụ prompt hay:*\n"
+            "Nhập mô tả bạn muốn hệ thống thực hiện:\n\n"
+            "💡 *Ví dụ prompt:*\n"
             "`wear a red summer dress`\n"
             "`wearing a suit, professional`\n"
             "`anime style, colorful outfit`",
@@ -935,16 +1033,15 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Ảnh cho video generation ──
     if state == "wait_video_photo":
         sess["video_photo_id"]   = photo.file_id
         sess["video_photo_name"] = f"video_{photo.file_id[:8]}.jpg"
         sess["state"]            = "wait_video_prompt"
         await update.message.reply_text(
             "✅ *ĐÃ NHẬN ẢNH\\!*\n\n"
-            "```\n  [✓] Ảnh đã được tải lên\n  [✓] Sẵn sàng tạo video\n```\n\n"
+            "```\n  [✓] Ảnh đã tải lên\n  [✓] Sẵn sàng tạo video\n```\n\n"
             "✏️ *BƯỚC 2 / 2 — Mô tả chuyển động:*\n\n"
-            "💡 *Ví dụ prompt video:*\n"
+            "💡 *Ví dụ prompt:*\n"
             "`gentle swaying motion`\n"
             "`hair blowing in the wind`\n"
             "`slow zoom in, cinematic`\n"
@@ -963,7 +1060,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     state = sess.get("state")
     text  = update.message.text.strip()
 
-    # ── Nhập key bypass ──
+    # ── Key bypass ──
     if state == "key":
         status = validate_key(text)
         if status == "valid":
@@ -1006,7 +1103,10 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         prompt     = text
 
         if not photo_id:
-            await update.message.reply_text("❌ Không tìm thấy ảnh\\. Vui lòng gửi lại ảnh\\!", parse_mode="MarkdownV2")
+            await update.message.reply_text(
+                "❌ Không tìm thấy ảnh\\. Vui lòng gửi lại ảnh\\!",
+                parse_mode="MarkdownV2"
+            )
             clear_session(u.id); return
 
         ok_spend, new_bal = spend_coins(u.id, COST_IMAGE)
@@ -1020,13 +1120,20 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             clear_session(u.id); return
 
+        tick_counter = [0]
         msg = await update.message.reply_text(
-            render_log_step(0, 9, ["  ⏳ Khởi động hệ thống AI...", f"  📝 Prompt: {prompt[:35]}"], "~30-40s"),
+            render_log_step(0, 9,
+                ["  ⏳ Khởi động CLOTHESBOT...",
+                 f"  📝 Prompt: {prompt[:35]}"],
+                "~30-40s", tick=0),
             parse_mode="Markdown"
         )
+
+        _photo_id   = photo_id
+        _photo_name = photo_name
         clear_session(u.id)
 
-        import threading, queue as _queue
+        import queue as _queue
         log_queue = _queue.Queue()
 
         def log_cb_q(lines, step=0):
@@ -1036,23 +1143,27 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             while True:
                 try:
                     lines, step = log_queue.get_nowait()
+                    tick_counter[0] += 1
                     try:
-                        await msg.edit_text(render_log_step(step, 9, lines, "..."), parse_mode="Markdown")
+                        await msg.edit_text(
+                            render_log_step(step, 9, lines, "...", tick=tick_counter[0]),
+                            parse_mode="Markdown"
+                        )
                     except: pass
                 except _queue.Empty:
                     pass
-                await asyncio.sleep(1.8)
+                await asyncio.sleep(1.5)
 
         loop = asyncio.get_event_loop()
         updater_task = asyncio.ensure_future(updater())
 
         try:
-            photo_file  = await update.get_bot().get_file(photo_id)
+            photo_file  = await update.get_bot().get_file(_photo_id)
             photo_bytes = await photo_file.download_as_bytearray()
-            log_cb_q(["  ✅ Ảnh đã tải xong!", "  🔐 Đang kết nối AI engine..."], 1)
+            log_cb_q(["  ✅ Ảnh đã tải xong!", "  👗 Đang phân tích trang phục..."], 1)
 
             result_bytes = await loop.run_in_executor(
-                None, generate_image, bytes(photo_bytes), photo_name, prompt, log_cb_q
+                None, generate_image, bytes(photo_bytes), _photo_name, prompt, log_cb_q
             )
         except Exception as e:
             updater_task.cancel()
@@ -1071,15 +1182,14 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user = get_user(u.id)
         user["total_images"] = user.get("total_images", 0) + 1
 
-        # Lưu ảnh kết quả vào session để dùng cho tạo video
-        user_sess = get_session(u.id)
-        user_sess["last_image_bytes"] = result_bytes
-        user_sess["last_image_name"]  = photo_name
+        fresh_sess = get_session(u.id)
+        fresh_sess["last_image_bytes"] = result_bytes
+        fresh_sess["last_image_name"]  = _photo_name
 
         await update.message.reply_photo(
             photo=result_bytes,
             caption=(
-                f"✨ *KẾT QUẢ TẠO ẢNH AI*\n\n"
+                f"✨ *CLOTHESBOT · KẾT QUẢ TẠO ẢNH*\n\n"
                 f"```\n  ✅ Xử lý thành công\n  📝 Prompt: {prompt[:40]}\n  💰 Còn lại: {new_bal} xu\n  🏆 Hạng: {rank_badge(new_bal)}\n```\n\n"
                 f"👇 *Muốn tạo video từ ảnh này không?*"
             ),
@@ -1093,13 +1203,15 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if state == "wait_video_prompt":
         prompt = text
 
-        # Lấy ảnh: có thể từ upload mới hoặc từ ảnh đã có trong session
         video_photo_bytes = sess.get("video_photo_bytes")
         video_photo_name  = sess.get("video_photo_name", "image.jpg")
         video_photo_id    = sess.get("video_photo_id")
 
         if not video_photo_bytes and not video_photo_id:
-            await update.message.reply_text("❌ Không tìm thấy ảnh\\. Vui lòng thử lại\\!", parse_mode="MarkdownV2")
+            await update.message.reply_text(
+                "❌ Không tìm thấy ảnh\\. Vui lòng thử lại\\!",
+                parse_mode="MarkdownV2"
+            )
             clear_session(u.id); return
 
         ok_spend, new_bal = spend_coins(u.id, COST_VIDEO)
@@ -1113,15 +1225,20 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             clear_session(u.id); return
 
+        tick_counter = [0]
         msg = await update.message.reply_text(
             render_video_log(0, 9,
-                ["  🎬 Khởi động Pika Video Engine...",
+                ["  🎬 Khởi động CLOTHESBOT Video...",
                  f"  📝 Prompt: {prompt[:35]}",
                  "  ⚠️  Quá trình này mất 2-5 phút, vui lòng chờ!"],
-                "~2-5 phút"
+                "~2-5 phút", tick=0
             ),
             parse_mode="Markdown"
         )
+
+        _vbytes = video_photo_bytes
+        _vname  = video_photo_name
+        _vid    = video_photo_id
         clear_session(u.id)
 
         import queue as _queue
@@ -1134,8 +1251,12 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             while True:
                 try:
                     lines, step = log_queue.get_nowait()
+                    tick_counter[0] += 1
                     try:
-                        await msg.edit_text(render_video_log(step, 9, lines, "đang xử lý..."), parse_mode="Markdown")
+                        await msg.edit_text(
+                            render_video_log(step, 9, lines, "đang xử lý...", tick=tick_counter[0]),
+                            parse_mode="Markdown"
+                        )
                     except: pass
                 except _queue.Empty:
                     pass
@@ -1145,17 +1266,16 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         updater_task = asyncio.ensure_future(video_updater())
 
         try:
-            # Download ảnh nếu chưa có bytes
-            if not video_photo_bytes and video_photo_id:
-                photo_file = await update.get_bot().get_file(video_photo_id)
+            if not _vbytes and _vid:
+                photo_file = await update.get_bot().get_file(_vid)
                 raw = await photo_file.download_as_bytearray()
-                video_photo_bytes = bytes(raw)
+                _vbytes = bytes(raw)
 
-            log_cb_q(["  ✅ Ảnh sẵn sàng!", "  📧 Đang tạo tài khoản Pika..."], 1)
+            log_cb_q(["  ✅ Ảnh sẵn sàng!", "  🔧 Đang khởi tạo phiên xử lý..."], 1)
 
             video_bytes, video_url = await loop.run_in_executor(
                 None, pika_create_account_and_generate,
-                video_photo_bytes, video_photo_name, prompt, log_cb_q
+                _vbytes, _vname, prompt, log_cb_q
             )
         except Exception as e:
             updater_task.cancel()
@@ -1178,8 +1298,8 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_video(
             video=video_bytes,
             caption=(
-                f"🎬 *VIDEO AI HOÀN TẤT\\!*\n\n"
-                f"```\n  ✅ Render thành công\n  📝 Prompt: {prompt[:40]}\n  🎞️  Pika 2.5 | 480p | 5s\n  💰 Còn lại: {new_bal} xu\n  🏆 Hạng: {rank_badge(new_bal)}\n```"
+                f"🎬 ✨ *CLOTHESBOT · VIDEO HOÀN TẤT\\!*\n\n"
+                f"```\n  ✅ Render thành công\n  📝 Prompt: {prompt[:40]}\n  🎞️  480p | 5 giây\n  💰 Còn lại: {new_bal} xu\n  🏆 Hạng: {rank_badge(new_bal)}\n```"
             ),
             parse_mode="MarkdownV2",
             reply_markup=kb_after_video(new_bal),
@@ -1188,15 +1308,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.delete()
         return
 
-    # ── Tin nhắn thường ──
+    # ── Tin nhắn thường → splash lại ──
     user = get_user(u.id)
-    await update.message.reply_text(
-        msg_home(u.first_name or "bạn", user["coins"],
-                 user.get("total_images", 0), user.get("total_bypassed", 0),
-                 user.get("total_videos", 0)),
-        reply_markup=kb_main(user["coins"], u.first_name or ""),
-        parse_mode="MarkdownV2"
-    )
+    await animated_splash(update.message, u, user)
 
 def setup_application(bot_token: str) -> Application:
     application = Application.builder().token(bot_token).build()
