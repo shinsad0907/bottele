@@ -10,10 +10,52 @@ log = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
 WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-three.vercel.app").rstrip("/")
-INIT_COINS    = 1000000000000000000000000000000000
+INIT_COINS    = 1000000000000000000000
 BYPASS_REWARD = 20
 COST_IMAGE    = 10
 COST_VIDEO    = 20
+
+# ══════════════════════════════════════════════
+#  CHANNEL GATE — Bắt buộc join trước khi dùng
+# ══════════════════════════════════════════════
+REQUIRED_CHANNEL     = "@ClothessAI"
+REQUIRED_CHANNEL_URL = "https://t.me/ClothessAI"
+
+async def check_join(bot_instance, user_id: int) -> bool:
+    """Kiểm tra user đã join channel chưa. Trả về True nếu đã join."""
+    try:
+        member = await bot_instance.get_chat_member(
+            chat_id=REQUIRED_CHANNEL,
+            user_id=user_id
+        )
+        return member.status in ("member", "administrator", "creator")
+    except Exception as e:
+        log.warning(f"check_join error for {user_id}: {e}")
+        return False
+
+async def send_join_prompt(reply_fn):
+    """Gửi thông báo yêu cầu join channel."""
+    text = (
+        "```\n"
+        "╔══════════════════════════════════════╗\n"
+        "║  🔒  CLOTHESBOT  ·  YÊU CẦU  🔒     ║\n"
+        "╠══════════════════════════════════════╣\n"
+        "╚══════════════════════════════════════╝\n"
+        "```\n\n"
+        "⚠️ *BẠN CHƯA THAM GIA CHANNEL\\!*\n\n"
+        "Để sử dụng bot, bạn cần:\n\n"
+        "┌──────────────────────────────┐\n"
+        "│  1️⃣  Bấm nút bên dưới         │\n"
+        "│  2️⃣  Join channel              │\n"
+        "│  3️⃣  Quay lại bấm /start       │\n"
+        "└──────────────────────────────┘\n\n"
+        "✅ Hoàn toàn *MIỄN PHÍ* để tham gia\\!"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👗 Tham Gia Channel Ngay!", url=REQUIRED_CHANNEL_URL)],
+        [InlineKeyboardButton("✅ Đã Join → Bắt Đầu",     callback_data="check_join")],
+    ])
+    await reply_fn(text, reply_markup=kb, parse_mode="MarkdownV2")
 
 FIREBASE_KEY = "AIzaSyDkChmbBT5DiK0HNTA8Ffx8NJq7reWkS6I"
 TEMP_DOMAINS = ["getmule.com", "fivemail.com", "vomoto.com", "mailnull.com"]
@@ -840,6 +882,13 @@ def msg_stats(uid: int, coins: int, total_images: int, total_bypassed: int,
 # ══════════════════════════════════════════════
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u    = update.effective_user
+    # ── CHANNEL GATE ──
+    if not await check_join(ctx.bot, u.id):
+        await send_join_prompt(
+            lambda text, **kw: update.message.reply_text(text, **kw)
+        )
+        return
+    # ─────────────────
     user = get_user(u.id)
     full_clear_session(u.id)
     await animated_splash(update.message, u, user)
@@ -853,6 +902,49 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sess = get_session(u.id)
 
     if d == "noop": return
+
+    # ── Check join (nút "Đã Join → Bắt Đầu") ──
+    if d == "check_join":
+        if await check_join(ctx.bot, u.id):
+            user = get_user(u.id)
+            full_clear_session(u.id)
+            final_text = splash_final(
+                u.first_name or "bạn", user["coins"],
+                user.get("total_images", 0), user.get("total_bypassed", 0),
+                user.get("total_videos", 0),
+            )
+            await q.edit_message_text(
+                final_text,
+                reply_markup=kb_main(user["coins"]),
+                parse_mode="MarkdownV2"
+            )
+        else:
+            await q.answer(
+                "❌ Bạn chưa join channel! Hãy join rồi thử lại.",
+                show_alert=True
+            )
+        return
+
+    # ── Kiểm tra channel cho mọi hành động khác ──
+    if not await check_join(ctx.bot, u.id):
+        await q.answer("⚠️ Bạn cần join channel để dùng bot!", show_alert=True)
+        await q.edit_message_text(
+            "```\n"
+            "╔══════════════════════════════════════╗\n"
+            "║  🔒  CLOTHESBOT  ·  YÊU CẦU  🔒     ║\n"
+            "╠══════════════════════════════════════╣\n"
+            "╚══════════════════════════════════════╝\n"
+            "```\n\n"
+            "⚠️ *BẠN CHƯA THAM GIA CHANNEL\\!*\n\n"
+            "Vui lòng join channel để tiếp tục sử dụng bot\\.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👗 Tham Gia Channel Ngay!", url=REQUIRED_CHANNEL_URL)],
+                [InlineKeyboardButton("✅ Đã Join → Tiếp Tục",    callback_data="check_join")],
+            ]),
+            parse_mode="MarkdownV2"
+        )
+        return
+    # ─────────────────────────────────────────────
 
     # ── Home ──
     if d == "home":
@@ -1012,6 +1104,13 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u     = update.effective_user
+    # ── CHANNEL GATE ──
+    if not await check_join(ctx.bot, u.id):
+        await send_join_prompt(
+            lambda text, **kw: update.message.reply_text(text, **kw)
+        )
+        return
+    # ─────────────────
     sess  = get_session(u.id)
     state = sess.get("state")
     photo = update.message.photo[-1]
@@ -1056,6 +1155,13 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u     = update.effective_user
+    # ── CHANNEL GATE ──
+    if not await check_join(ctx.bot, u.id):
+        await send_join_prompt(
+            lambda text, **kw: update.message.reply_text(text, **kw)
+        )
+        return
+    # ─────────────────
     sess  = get_session(u.id)
     state = sess.get("state")
     text  = update.message.text.strip()
