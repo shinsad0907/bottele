@@ -11,7 +11,7 @@ from script.database       import (
     add_coins as db_add_coins, spend_coins as db_spend_coins,
     inc_image_count, inc_video_count, inc_proxy,
     set_package, record_payment,
-    do_rollcall, ROLLCALL_REWARD,
+    do_rollcall, ROLLCALL_REWARD, ROLLCALL_BY_PKG,
     admin_add_coins, admin_set_package, get_user_by_username,
 )
 from script.queue_manager  import enter_queue, leave_queue
@@ -201,7 +201,8 @@ def splash_final(name, coins, total_images, total_videos=0, package="free", roll
     bar   = coin_bar(coins)
     badge = rank_badge(coins)
     pkg   = pkg_badge(package)
-    rc_status = "✅ Đã điểm danh hôm nay" if roll_called else f"🎁 Chưa điểm danh \\(\\+{ROLLCALL_REWARD} xu\\)"
+    pkg_rc_reward = ROLLCALL_BY_PKG.get(package, 300)
+    rc_status = "✅ Đã điểm danh hôm nay" if roll_called else f"🎁 Chưa điểm danh \\(\\+{pkg_rc_reward} xu\\)"
     return (
         "```\n╔══════════════════════════════════════╗\n"
         "║    ██████╗██╗      ██████╗ ████████╗ ║\n"
@@ -257,7 +258,8 @@ async def animated_splash(message_obj, tg_user, user_db: dict):
 def kb_main(coins, package="free", roll_called=False):
     badge     = rank_badge(coins)
     pkg       = pkg_badge(package)
-    rc_label  = "✅ Đã Điểm Danh" if roll_called else "📅 Điểm Danh (+100xu)"
+    pkg_rc_reward = ROLLCALL_BY_PKG.get(package, 300)
+    rc_label  = "✅ Đã Điểm Danh" if roll_called else f"📅 Điểm Danh (+{pkg_rc_reward}xu)"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
         [InlineKeyboardButton("🎨 ✨  TẠO ẢNH  ✨ 🎨",     callback_data="img_start")],
@@ -334,18 +336,28 @@ def msg_stats(uid, coins, total_images, total_videos=0, package="free"):
 
 def msg_help():
     return (
-        f"📖 *CLOTHESBOT · HƯỚNG DẪN*\n\n"
-        f"🎨 ✨ *TẠO ẢNH*\n"
-        f"1\\. Bấm `🎨 ✨ Tạo Ảnh`\n2\\. Gửi ảnh gốc\n3\\. Nhập prompt \\(EN\\)\n"
-        f"4\\. Đợi ~20\\-40 giây\n💰 Chi phí: `{COST_IMAGE} xu` / lần\n\n"
-        f"🎬 ✨ *TẠO VIDEO*\n"
-        f"1\\. Bấm `🎬 ✨ Tạo Video`\n2\\. Gửi ảnh\n3\\. Nhập mô tả chuyển động\n"
-        f"4\\. Đợi ~2\\-5 phút\n💰 Chi phí: `{COST_VIDEO} xu` / lần\n\n"
-        f"📅 *ĐIỂM DANH*\nBấm `📅 Điểm Danh` mỗi ngày để nhận `\\+{ROLLCALL_REWARD} xu`\n"
-        f"Reset lúc 00:00 giờ Việt Nam\\.\n\n"
-        f"💳 *MUA XU / VIP*\n"
-        f"Bấm `💳 Mua Xu / VIP` → chọn gói → chuyển khoản → gửi ảnh bill\n"
-        f"Admin duyệt trong 5\\-15 phút\\."
+        "📖 *CLOTHESBOT · HƯỚNG DẪN*\n\n"
+        f"🎨 ✨ *TẠO ẢNH* · `{COST_IMAGE} xu/lần`\n"
+        "1\\. Bấm `🎨 ✨ Tạo Ảnh`\n2\\. Gửi ảnh gốc\n3\\. Nhập prompt \\(EN\\)\n4\\. Đợi ~20\\-40 giây\n\n"
+        f"🎬 ✨ *TẠO VIDEO* · `{COST_VIDEO} xu/lần`\n"
+        "1\\. Bấm `🎬 ✨ Tạo Video`\n2\\. Gửi ảnh\n3\\. Nhập mô tả chuyển động\n4\\. Đợi ~2\\-5 phút\n\n"
+        "📅 *ĐIỂM DANH HÀNG NGÀY*\n"
+        "```\n"
+        "  Gói FREE    → +300 xu/ngày\n"
+        "  Gói VIP     → +1.500 xu/ngày\n"
+        "  Gói VIP PRE → +5.000 xu/ngày\n"
+        "```\n"
+        "Reset lúc 00:00 giờ Việt Nam\n\n"
+        "💰 *GÓI MUA XU*\n"
+        "```\n"
+        "   20k  →  1.000 xu  (50 anh / 33 vid)\n"
+        "   50k  →  3.000 xu  (150 anh / 100 vid)\n"
+        "  100k  →  7.000 xu  (350 anh / 233 vid)\n"
+        "  200k  → 16.000 xu  (800 anh / 533 vid)\n"
+        "```\n\n"
+        "💳 *MUA VIP*\n"
+        "Bấm `💳 Mua Xu / VIP` → chọn gói → CK → gửi bill\n"
+        "Admin duyệt trong 5\\-15 phút\\."
     )
 
 # ══════════════════════════════════════════════
@@ -778,12 +790,13 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Roll Call (Điểm danh) ──
     if d == "rollcall":
-        success, new_coin = do_rollcall(str(u.id))
+        success, new_coin, reward = do_rollcall(str(u.id))
         if success:
+            pkg_label = {"free": "🆓 FREE", "vip": "👑 VIP", "vip_pro": "💎 VIP PRE"}.get(package, "FREE")
             await q.edit_message_text(
                 f"```\n{BANNER_SUCCESS}\n```\n\n"
                 f"📅 *ĐIỂM DANH THÀNH CÔNG\\!*\n\n"
-                f"```\n  🎁 Nhận được:  +{ROLLCALL_REWARD} xu\n  💰 Số dư mới:  {new_coin} xu\n```\n\n"
+                f"```\n  🏷  Gói:        {pkg_label}\n  🎁 Nhận được:  +{reward} xu\n  💰 Số dư mới:  {new_coin} xu\n```\n\n"
                 f"✅ Quay lại lúc 00:00 ngày mai để điểm danh tiếp\\!",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🎨 Tạo Ảnh Ngay!", callback_data="img_start"),
@@ -794,7 +807,8 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="MarkdownV2"
             )
         else:
-            await q.answer("✅ Bạn đã điểm danh hôm nay rồi! Quay lại ngày mai nhé.", show_alert=True)
+            pkg_reward = ROLLCALL_BY_PKG.get(package, 300)
+            await q.answer(f"✅ Đã điểm danh hôm nay rồi! (+{pkg_reward} xu mỗi ngày)", show_alert=True)
         return
 
     # ── Start Image ──

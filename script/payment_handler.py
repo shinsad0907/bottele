@@ -33,27 +33,26 @@ ADMIN_BOT_TOKEN = "8712430335:AAGBsFNLflx7BXZpjgQ_fMesAqF76gAgUCk"
 ADMIN_CHAT_ID   = 5933186992   # chat_id của @shadowbotnet99
 
 COIN_PACKAGES = [
-    {"id": "coin_10k",  "vnd": 10_000,  "coin": 200,  "image": 10,  "label": "200 xu  · 10 ảnh"},
-    {"id": "coin_20k",  "vnd": 20_000,  "coin": 450,  "image": 22,  "label": "450 xu  · 22 ảnh"},
-    {"id": "coin_50k",  "vnd": 50_000,  "coin": 1200, "image": 60,  "label": "1.200 xu · 60 ảnh"},
-    {"id": "coin_100k", "vnd": 100_000, "coin": 2600, "image": 130, "label": "2.600 xu · 130 ảnh"},
-    {"id": "coin_200k", "vnd": 200_000, "coin": 5500, "image": 275, "label": "5.500 xu · 275 ảnh"},
+    {"id": "coin_20k",  "vnd": 20_000,  "coin": 1000,  "image": 50,  "video": 33,  "label": "1.000 xu · 50 ảnh · 33 video"},
+    {"id": "coin_50k",  "vnd": 50_000,  "coin": 3000,  "image": 150, "video": 100, "label": "3.000 xu · 150 ảnh · 100 video"},
+    {"id": "coin_100k", "vnd": 100_000, "coin": 7000,  "image": 350, "video": 233, "label": "7.000 xu · 350 ảnh · 233 video"},
+    {"id": "coin_200k", "vnd": 200_000, "coin": 16000, "image": 800, "video": 533, "label": "16.000 xu · 800 ảnh · 533 video"},
 ]
 
 VIP_PACKAGES = [
     {
         "id":    "vip",
         "vnd":   69_000,
-        "label": "VIP  ·  700 xu/ngày",
-        "coin_per_day": 700,
-        "desc":  "Nhận 700 xu mỗi ngày, không hàng chờ",
+        "label": "VIP  ·  1.500 xu/ngày",
+        "coin_per_day": 1500,
+        "desc":  "Nhận 1.500 xu mỗi ngày, không hàng chờ",
     },
     {
         "id":    "vip_pro",
         "vnd":   149_000,
-        "label": "VIP PRO  ·  3.000 xu/ngày",
-        "coin_per_day": 3000,
-        "desc":  "Nhận 3.000 xu mỗi ngày, ưu tiên tối đa",
+        "label": "VIP PRE  ·  5.000 xu/ngày",
+        "coin_per_day": 5000,
+        "desc":  "Nhận 5.000 xu mỗi ngày, ưu tiên tối đa",
     },
 ]
 
@@ -135,12 +134,16 @@ def msg_coin_menu() -> str:
         "╚══════════════════════════════════════╝\n"
         "```\n\n"
         "📦 *Các gói xu:*\n\n"
+        "```\n"
+        "  Giá     Xu        Ảnh    Video\n"
+        "  ─────────────────────────────\n"
     ]
     for p in COIN_PACKAGES:
+        coin_str = f"{p['coin']:,}".replace(",", ".")
         lines.append(
-            f"  `{p['vnd']//1000:>3}k` → *{p['coin']:>4} xu*  \\({p['image']} ảnh\\)\n"
+            f"  {p['vnd']//1000:>3}k  →  {coin_str:>6} xu  {p['image']:>3} ảnh  {p['video']:>3} vid\n"
         )
-    lines.append("\n👇 Chọn gói bên dưới:")
+    lines.append("```\n\n👇 Chọn gói bên dưới:")
     return "".join(lines)
 
 def msg_vip_menu() -> str:
@@ -151,10 +154,17 @@ def msg_vip_menu() -> str:
         "╠══════════════════════════════════════╣\n"
         "╚══════════════════════════════════════╝\n"
         "```\n\n"
-        "✨ *Gói VIP:*\n"
-        "  `69k`  → *VIP*  ·  700 xu/ngày  ·  Không hàng chờ\n\n"
-        "✨ *Gói VIP PRO:*\n"
-        "  `149k` → *VIP PRO*  ·  3\\.000 xu/ngày  ·  Ưu tiên tối đa\n\n"
+        "```\n"
+        "  Gói       Giá     Xu/ngày  Ảnh/ng  Vid/ng\n"
+        "  ─────────────────────────────────────────\n"
+        "  FREE       0đ      300 xu   15 ảnh  8 vid\n"
+        "  VIP        69k   1.500 xu   75 ảnh  42 vid\n"
+        "  VIP PRE   149k   5.000 xu  250 ảnh 142 vid\n"
+        "```\n\n"
+        "✨ *Gói VIP \- 69\\.000đ/tháng:*\n"
+        "  Điểm danh nhận `1\\.500 xu/ngày` · Không hàng chờ\n\n"
+        "✨ *Gói VIP PRE \- 149\\.000đ/tháng:*\n"
+        "  Điểm danh nhận `5\\.000 xu/ngày` · Ưu tiên tối đa\n\n"
         "👇 Chọn gói bên dưới:"
     )
 

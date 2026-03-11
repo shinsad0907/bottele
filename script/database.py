@@ -15,8 +15,15 @@ SUPABASE_URL = "https://ljywfdvcwyhixuwffecp.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqeXdmZHZjd3loaXh1d2ZmZWNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNDQ4MzgsImV4cCI6MjA4ODYyMDgzOH0.15mtEfJAMZPY8LT9od92g73YuJNCFPhUYzoDri0HK-s"
 
 INIT_COINS        = 100
-ROLLCALL_REWARD   = 100   # xu điểm danh mỗi ngày
+ROLLCALL_REWARD   = 300   # xu điểm danh gói Free
 VN_TZ             = timezone(timedelta(hours=7))
+
+# Xu điểm danh theo gói
+ROLLCALL_BY_PKG = {
+    "free":    300,
+    "vip":     1500,
+    "vip_pro": 5000,
+}
 
 HEADERS = {
     "apikey":        SUPABASE_KEY,
@@ -146,51 +153,46 @@ def vn_today_str() -> str:
     """Trả về chuỗi ngày hôm nay theo giờ VN, dạng 'YYYY-MM-DD'."""
     return datetime.now(VN_TZ).strftime("%Y-%m-%d")
 
-def do_rollcall(user_id: str) -> tuple[bool, int]:
+def do_rollcall(user_id: str) -> tuple[bool, int, int]:
     """
-    Thực hiện điểm danh.
-    Trả về (True, new_coin) nếu thành công,
-            (False, cur_coin) nếu đã điểm danh hôm nay rồi.
-
-    Logic: cột roll_call (bool) – True = đã điểm danh hôm nay.
-    Hàng ngày phải reset roll_call = False từ bên ngoài hoặc
-    ta kiểm tra thêm cột roll_call_date (string 'YYYY-MM-DD').
-    
-    Vì Supabase chỉ có cột roll_call (bool), ta dùng thêm
-    cột roll_call_date để biết ngày nào đã điểm danh.
-    Nếu DB chưa có cột đó thì fallback về bool đơn thuần.
+    Thực hiện điểm danh theo gói của user.
+    Trả về (True, new_coin, reward) nếu thành công,
+            (False, cur_coin, 0)    nếu đã điểm danh hôm nay rồi.
+    Xu thưởng: Free=300 · VIP=1500 · VIP PRE=5000
     """
     u = get_user(str(user_id))
     if not u:
-        return False, 0
+        return False, 0, 0
 
-    today = vn_today_str()
-    last_date = u.get("roll_call_date", "")   # cột tuỳ chọn
+    today     = vn_today_str()
+    last_date = u.get("roll_call_date", "")
     already   = u.get("roll_call", False)
+    package   = u.get("package", "free")
+    reward    = ROLLCALL_BY_PKG.get(package, ROLLCALL_REWARD)
 
     # Nếu có cột roll_call_date → dùng ngày để kiểm tra
     if last_date:
         if last_date == today:
-            return False, u.get("coin", 0)
+            return False, u.get("coin", 0), 0
         # Ngày mới → cho điểm danh
-        new_coin = (u.get("coin") or 0) + ROLLCALL_REWARD
+        new_coin = (u.get("coin") or 0) + reward
         update_user_field(str(user_id), {
             "coin":           new_coin,
             "roll_call":      True,
             "roll_call_date": today,
         })
-        return True, new_coin
+        return True, new_coin, reward
 
     # Fallback: chỉ có cột bool roll_call
     if already:
-        return False, u.get("coin", 0)
+        return False, u.get("coin", 0), 0
 
-    new_coin = (u.get("coin") or 0) + ROLLCALL_REWARD
+    new_coin = (u.get("coin") or 0) + reward
     update_user_field(str(user_id), {
         "coin":      new_coin,
         "roll_call": True,
     })
-    return True, new_coin
+    return True, new_coin, reward
 
 def reset_all_rollcall():
     """Admin gọi mỗi 0h VN để reset roll_call = False cho tất cả user."""
