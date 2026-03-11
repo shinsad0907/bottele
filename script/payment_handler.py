@@ -1,133 +1,314 @@
 """
-queue_manager.py
-────────────────
-Quản lý hàng chờ cho người dùng FREE:
+payment_handler.py
+------------------
+Xử lý mua xu và mua package VIP.
 
-• Hàng chờ ẢO  (virtual_queue): hiển thị số người chờ + thời gian (~20s/người)
-  → người dùng thấy "bạn đang ở vị trí X, chờ ~Ys"
+Giá xu:
+  10.000đ  → 200 xu   (10 ảnh)
+  20.000đ  → 450 xu   (22 ảnh)
+  50.000đ  → 1200 xu  (60 ảnh)
+  100.000đ → 2600 xu  (130 ảnh)
+  200.000đ → 5500 xu  (275 ảnh)
 
-• Hàng chờ THẬT (real_queue / clothesAI): tối đa MAX_SLOTS người xử lý đồng thời
-  → khi 1 người xong, người tiếp theo trong hàng được lên slot
-
-Người dùng VIP (package != 'free') BỎ QUA hàng chờ.
+Giá VIP:
+  69.000đ  → VIP      (700 xu/ngày)
+  149.000đ → VIP PRO  (3000 xu/ngày)
 """
-
-import asyncio
 import logging
-import time
-from collections import deque
-from script.database import (
-    get_active_slots, add_to_clothesAI, remove_from_clothesAI,
-    count_active_slots, set_status, set_waiting_number, get_user_db,
-    MAX_SLOTS,
+from telegram import (
+    InlineKeyboardButton, InlineKeyboardMarkup, Update
 )
+from telegram.ext import ContextTypes
 
 log = logging.getLogger(__name__)
 
-VIRTUAL_WAIT_PER_PERSON = 20   # giây chờ ảo mỗi người phía trước
+# ══════════════════════════════════════════════
+#  CONFIG
+# ══════════════════════════════════════════════
+QR_IMAGE_PATH = "image/qr.png"   # ảnh QR chuyển khoản
 
-# ── In-memory real queue ──────────────────────────────────────────────────────
-# Mỗi entry: {"user_id": str, "future": asyncio.Future, "enqueue_time": float}
-_real_queue: deque = deque()
-_queue_lock = asyncio.Lock()
+COIN_PACKAGES = [
+    {"id": "coin_10k",  "vnd": 10_000,  "coin": 200,  "image": 10,  "label": "200 xu  · 10 ảnh"},
+    {"id": "coin_20k",  "vnd": 20_000,  "coin": 450,  "image": 22,  "label": "450 xu  · 22 ảnh"},
+    {"id": "coin_50k",  "vnd": 50_000,  "coin": 1200, "image": 60,  "label": "1.200 xu · 60 ảnh"},
+    {"id": "coin_100k", "vnd": 100_000, "coin": 2600, "image": 130, "label": "2.600 xu · 130 ảnh"},
+    {"id": "coin_200k", "vnd": 200_000, "coin": 5500, "image": 275, "label": "5.500 xu · 275 ảnh"},
+]
 
-# ── Virtual queue counter ─────────────────────────────────────────────────────
-# Giả lập số người chờ ảo để hiển thị cho user
-_virtual_extras: int = 2   # Mặc định luôn có ≥2 người chờ ảo khi queue trống
+VIP_PACKAGES = [
+    {
+        "id":    "vip",
+        "vnd":   69_000,
+        "label": "VIP  ·  700 xu/ngày",
+        "coin_per_day": 700,
+        "desc":  "Nhận 700 xu mỗi ngày, không hàng chờ",
+    },
+    {
+        "id":    "vip_pro",
+        "vnd":   149_000,
+        "label": "VIP PRO  ·  3.000 xu/ngày",
+        "coin_per_day": 3000,
+        "desc":  "Nhận 3.000 xu mỗi ngày, ưu tiên tối đa",
+    },
+]
 
-def _virtual_position(real_pos: int) -> tuple[int, int]:
+COIN_MAP = {p["id"]: p for p in COIN_PACKAGES}
+VIP_MAP  = {p["id"]: p for p in VIP_PACKAGES}
+
+
+def esc(text: str) -> str:
+    for ch in r'\_*[]()~`>#+-=|{}.!':
+        text = text.replace(ch, f'\\{ch}')
+    return text
+
+
+# ══════════════════════════════════════════════
+#  KEYBOARDS
+# ══════════════════════════════════════════════
+
+def kb_payment_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💰 Mua Xu",         callback_data="pay_coin_menu")],
+        [InlineKeyboardButton("👑 Mua VIP / VIP PRO", callback_data="pay_vip_menu")],
+        [InlineKeyboardButton("◀️ Quay Về",         callback_data="home")],
+    ])
+
+def kb_coin_menu():
+    rows = []
+    for p in COIN_PACKAGES:
+        rows.append([InlineKeyboardButton(
+            f"💎 {p['label']}  ·  {p['vnd']//1000}k",
+            callback_data=f"pay_buy_{p['id']}"
+        )])
+    rows.append([InlineKeyboardButton("◀️ Quay Lại", callback_data="pay_menu")])
+    return InlineKeyboardMarkup(rows)
+
+def kb_vip_menu():
+    rows = []
+    for p in VIP_PACKAGES:
+        rows.append([InlineKeyboardButton(
+            f"👑 {p['label']}  ·  {p['vnd']//1000}k",
+            callback_data=f"pay_buy_{p['id']}"
+        )])
+    rows.append([InlineKeyboardButton("◀️ Quay Lại", callback_data="pay_menu")])
+    return InlineKeyboardMarkup(rows)
+
+def kb_confirm_payment(pkg_id: str):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Tôi Đã Chuyển Khoản", callback_data=f"pay_confirm_{pkg_id}")],
+        [InlineKeyboardButton("❌ Hủy",                  callback_data="pay_menu")],
+    ])
+
+def kb_after_pay_confirm():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏠 Về Menu Chính", callback_data="home")],
+    ])
+
+
+# ══════════════════════════════════════════════
+#  MESSAGE BUILDERS
+# ══════════════════════════════════════════════
+
+def msg_payment_menu(username: str, coin: int) -> str:
+    return (
+        "```\n"
+        "╔══════════════════════════════════════╗\n"
+        "║  💳  CLOTHESBOT  ·  PAYMENT  💳     ║\n"
+        "╠══════════════════════════════════════╣\n"
+        "╚══════════════════════════════════════╝\n"
+        "```\n\n"
+        f"👤 `@{esc(username)}`   💰 Xu hiện có: `{coin}`\n\n"
+        "Chọn loại gói bạn muốn mua:"
+    )
+
+def msg_coin_menu() -> str:
+    lines = [
+        "```\n"
+        "╔══════════════════════════════════════╗\n"
+        "║  💰  MUA XU  ·  CLOTHESBOT  💰      ║\n"
+        "╠══════════════════════════════════════╣\n"
+        "╚══════════════════════════════════════╝\n"
+        "```\n\n"
+        "📦 *Các gói xu:*\n\n"
+    ]
+    for p in COIN_PACKAGES:
+        lines.append(
+            f"  `{p['vnd']//1000:>3}k` → *{p['coin']:>4} xu*  \\({p['image']} ảnh\\)\n"
+        )
+    lines.append("\n👇 Chọn gói bên dưới:")
+    return "".join(lines)
+
+def msg_vip_menu() -> str:
+    return (
+        "```\n"
+        "╔══════════════════════════════════════╗\n"
+        "║  👑  MUA VIP  ·  CLOTHESBOT  👑     ║\n"
+        "╠══════════════════════════════════════╣\n"
+        "╚══════════════════════════════════════╝\n"
+        "```\n\n"
+        "✨ *Gói VIP:*\n"
+        "  `69k`  → *VIP*  ·  700 xu/ngày  ·  Không hàng chờ\n\n"
+        "✨ *Gói VIP PRO:*\n"
+        "  `149k` → *VIP PRO*  ·  3\\.000 xu/ngày  ·  Ưu tiên tối đa\n\n"
+        "👇 Chọn gói bên dưới:"
+    )
+
+def msg_payment_qr(username: str, pkg_id: str, vnd: int, label: str) -> str:
+    """Nội dung tin nhắn kèm QR để chuyển khoản."""
+    # Phân biệt nội dung chuyển khoản
+    if pkg_id.startswith("coin"):
+        content = f"@{username} \\- mua xu"
+    else:
+        content = f"@{username} \\- package"
+
+    return (
+        "```\n"
+        "╔══════════════════════════════════════╗\n"
+        "║  📲  THÔNG TIN CHUYỂN KHOẢN  📲     ║\n"
+        "╠══════════════════════════════════════╣\n"
+        "╚══════════════════════════════════════╝\n"
+        "```\n\n"
+        f"📦 Gói: *{esc(label)}*\n"
+        f"💵 Số tiền: `{vnd:,}đ`\n\n"
+        "```\n"
+        "┌──────────────────────────────┐\n"
+        "│  Nội dung chuyển khoản:      │\n"
+        f"│  {content:<28}│\n"
+        "└──────────────────────────────┘\n"
+        "```\n\n"
+        "📸 *Quét mã QR bên dưới để chuyển khoản*\n\n"
+        "⚠️ Sau khi chuyển khoản, bấm:\n"
+        "*✅ Tôi Đã Chuyển Khoản*\n"
+        "Admin sẽ duyệt và cộng xu trong *5\\-15 phút*\\."
+    )
+
+def msg_pending_confirm(label: str) -> str:
+    return (
+        "```\n"
+        "╔══════════════════════════════════════╗\n"
+        "║  ⏳  ĐANG CHỜ XÁC NHẬN  ⏳          ║\n"
+        "╠══════════════════════════════════════╣\n"
+        "╚══════════════════════════════════════╝\n"
+        "```\n\n"
+        f"✅ Đã ghi nhận yêu cầu mua: *{esc(label)}*\n\n"
+        "📋 Thông tin của bạn đã được gửi tới admin\\.\n"
+        "⏱ Admin sẽ duyệt trong *5\\-15 phút*\\.\n\n"
+        "💡 Nếu sau 30 phút chưa nhận được xu, liên hệ hỗ trợ\\."
+    )
+
+
+# ══════════════════════════════════════════════
+#  HANDLER (gọi từ btn() trong bottele.py)
+# ══════════════════════════════════════════════
+
+async def handle_payment_callback(d: str, q, u, user_db: dict,
+                                  payment_bot_token: str | None = None):
     """
-    Trả về (hiển thị_vị_trí, hiển_thị_thời_gian_giây).
-    real_pos = 0 nghĩa là đang được xử lý.
+    d          : callback_data
+    q          : CallbackQuery
+    u          : telegram User
+    user_db    : dict từ database.get_or_create_user
+    payment_bot_token: (tuỳ chọn) token bot payment riêng để gửi thông báo
     """
-    display_pos  = real_pos + _virtual_extras
-    display_wait = display_pos * VIRTUAL_WAIT_PER_PERSON
-    return display_pos, display_wait
+    from script.database import record_payment
 
-# ── Public API ────────────────────────────────────────────────────────────────
+    username = u.username or str(u.id)
+    coin_cur = user_db.get("coin", 0)
 
-async def enqueue(user_id: str, progress_cb=None) -> None:
-    """
-    Đưa user vào hàng chờ THẬT và đợi đến lượt.
-    
-    progress_cb(position, wait_seconds): callback để bot gửi cập nhật hàng chờ cho user.
-    Gọi hàm này với await, nó sẽ resolve khi user được lên slot xử lý.
-    """
-    loop = asyncio.get_event_loop()
-    fut  = loop.create_future()
+    # ── Menu chính payment ──
+    if d == "pay_menu":
+        await q.edit_message_text(
+            msg_payment_menu(username, coin_cur),
+            reply_markup=kb_payment_menu(),
+            parse_mode="MarkdownV2"
+        )
+        return
 
-    async with _queue_lock:
-        _real_queue.append({
-            "user_id"     : str(user_id),
-            "future"      : fut,
-            "enqueue_time": time.time(),
-        })
-        pos = len(_real_queue)   # 1-indexed
+    # ── Menu mua xu ──
+    if d == "pay_coin_menu":
+        await q.edit_message_text(
+            msg_coin_menu(),
+            reply_markup=kb_coin_menu(),
+            parse_mode="MarkdownV2"
+        )
+        return
 
-    # Cập nhật DB: status = waiting, waiting = vị trí ảo
-    display_pos, display_wait = _virtual_position(pos)
-    set_status(str(user_id), "waiting")
-    set_waiting_number(str(user_id), display_pos)
+    # ── Menu mua VIP ──
+    if d == "pay_vip_menu":
+        await q.edit_message_text(
+            msg_vip_menu(),
+            reply_markup=kb_vip_menu(),
+            parse_mode="MarkdownV2"
+        )
+        return
 
-    if progress_cb:
+    # ── Chọn gói → hiện QR ──
+    if d.startswith("pay_buy_"):
+        pkg_id = d[len("pay_buy_"):]
+        pkg = COIN_MAP.get(pkg_id) or VIP_MAP.get(pkg_id)
+        if not pkg:
+            await q.answer("Gói không hợp lệ!", show_alert=True)
+            return
+
+        caption = msg_payment_qr(username, pkg_id, pkg["vnd"], pkg["label"])
         try:
-            await progress_cb(display_pos, display_wait)
-        except Exception:
-            pass
+            with open(QR_IMAGE_PATH, "rb") as f:
+                await q.message.reply_photo(
+                    photo=f,
+                    caption=caption,
+                    parse_mode="MarkdownV2",
+                    reply_markup=kb_confirm_payment(pkg_id)
+                )
+            await q.answer()
+        except FileNotFoundError:
+            # Nếu chưa có file QR thì gửi text
+            await q.edit_message_text(
+                caption,
+                reply_markup=kb_confirm_payment(pkg_id),
+                parse_mode="MarkdownV2"
+            )
+        return
 
-    # Trigger dispatcher (nếu có slot trống)
-    asyncio.ensure_future(_dispatch())
+    # ── User bấm "Đã chuyển khoản" ──
+    if d.startswith("pay_confirm_"):
+        pkg_id = d[len("pay_confirm_"):]
+        pkg = COIN_MAP.get(pkg_id) or VIP_MAP.get(pkg_id)
+        if not pkg:
+            await q.answer("Gói không hợp lệ!", show_alert=True)
+            return
 
-    # Chờ đến khi dispatcher giải phóng future này
-    await fut
+        # Ghi vào bảng payment (trạng thái pending)
+        record_payment(
+            user_id   = str(u.id),
+            username  = username,
+            package_or_coin = pkg_id,
+            amount_vnd      = pkg["vnd"],
+        )
 
+        # Thông báo cho bot payment (nếu có token riêng)
+        if payment_bot_token:
+            try:
+                from telegram import Bot as TGBot
+                pay_bot = TGBot(token=payment_bot_token)
+                pkg_type = "mua xu" if pkg_id.startswith("coin") else "package"
+                notify_text = (
+                    f"💳 *YÊU CẦU THANH TOÁN MỚI*\n\n"
+                    f"👤 @{username} \\(`{u.id}`\\)\n"
+                    f"📦 Gói: `{pkg['label']}`\n"
+                    f"💵 Số tiền: `{pkg['vnd']:,}đ`\n"
+                    f"📝 Loại: *{pkg_type}*\n"
+                    f"🕐 `{__import__('datetime').datetime.now().strftime('%H:%M %d/%m/%Y')}`"
+                )
+                # Gửi tới admin qua payment bot (cần chat_id admin)
+                # await pay_bot.send_message(chat_id=ADMIN_CHAT_ID, text=notify_text, parse_mode="MarkdownV2")
+                async with pay_bot:
+                    pass  # placeholder
+            except Exception as e:
+                log.error(f"payment_bot notify error: {e}")
 
-async def release(user_id: str) -> None:
-    """Gọi sau khi user xử lý xong để giải phóng slot."""
-    remove_from_clothesAI(str(user_id))
-    set_status(str(user_id), "idle")
-    set_waiting_number(str(user_id), 0)
-    asyncio.ensure_future(_dispatch())
-
-
-async def _dispatch() -> None:
-    """
-    Kiểm tra clothesAI có slot trống không.
-    Nếu có → lấy người đầu queue lên, resolve future của họ.
-    """
-    async with _queue_lock:
-        active = count_active_slots()
-        while _real_queue and active < MAX_SLOTS:
-            entry = _real_queue.popleft()
-            uid   = entry["user_id"]
-            fut   = entry["future"]
-
-            # Thêm vào clothesAI
-            ok = add_to_clothesAI(uid)
-            if ok:
-                set_status(uid, "processing")
-                set_waiting_number(uid, 0)
-                if not fut.done():
-                    fut.set_result(True)
-                active += 1
-            else:
-                # Slot đầy bất ngờ → đưa lại đầu queue
-                _real_queue.appendleft(entry)
-                break
-
-        # Cập nhật số thứ tự ảo cho những người còn trong queue
-        for idx, entry in enumerate(_real_queue):
-            uid = entry["user_id"]
-            display_pos, _ = _virtual_position(idx + 1)
-            set_waiting_number(uid, display_pos)
-
-
-def queue_length() -> int:
-    return len(_real_queue)
-
-
-def is_free_user(user_id: str) -> bool:
-    u = get_user_db(str(user_id))
-    if not u:
-        return True
-    return (u.get("package") or "free") == "free"
+        await q.edit_message_text(
+            msg_pending_confirm(pkg["label"]),
+            reply_markup=kb_after_pay_confirm(),
+            parse_mode="MarkdownV2"
+        )
+        return

@@ -8,7 +8,7 @@ SUPABASE_URL = "https://ljywfdvcwyhixuwffecp.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqeXdmZHZjd3loaXh1d2ZmZWNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNDQ4MzgsImV4cCI6MjA4ODYyMDgzOH0.15mtEfJAMZPY8LT9od92g73YuJNCFPhUYzoDri0HK-s"
 
 INIT_COINS    = 100
-MAX_SLOTS     = 5   # Số slot tạo ảnh đồng thời tối đa (clothesAI)
+MAX_SLOTS     = 5   # Tối đa bao nhiêu người tạo cùng lúc trong clothesAI
 
 def _client():
     return supabase.create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -17,176 +17,152 @@ def _client():
 #  MANAGER USER
 # ══════════════════════════════════════════════
 
-def get_user_db(user_id: str) -> dict | None:
+def get_user(user_id: str) -> dict | None:
     try:
         res = _client().from_("manager_user").select("*").eq("name_user", str(user_id)).execute()
         return res.data[0] if res.data else None
     except Exception as e:
-        log.error(f"get_user_db: {e}")
+        log.error(f"get_user error: {e}")
         return None
 
-def create_user_db(user_id: str, username: str = "") -> dict:
+def get_or_create_user(user_id: str, username: str = "") -> dict:
+    u = get_user(str(user_id))
+    if u:
+        return u
     try:
         data = {
-            "name_user"           : str(user_id),
-            "username"            : username or str(user_id),
-            "coin"                : INIT_COINS,
-            "number_create_image" : 0,
-            "number_create_video" : 0,
-            "proxy"               : 0,
-            "waiting"             : 0,
-            "package"             : "free",
-            "status"              : "idle",
-            "purchase_date"       : None,
+            "name_user":           str(user_id),
+            "username":            username or str(user_id),
+            "coin":                INIT_COINS,
+            "number_create_image": 0,
+            "number_create_video": 0,
+            "proxy":               0,
+            "waiting":             0,
+            "package":             "free",
+            "status":              "idle",
+            "purchase_date":       None,
         }
         res = _client().from_("manager_user").insert(data).execute()
         log.info(f"[DB] Created user {user_id}")
         return res.data[0] if res.data else data
     except Exception as e:
-        log.error(f"create_user_db: {e}")
+        log.error(f"create_user error: {e}")
         return {}
 
-def get_or_create_user(user_id: str, username: str = "") -> dict:
-    u = get_user_db(str(user_id))
-    if not u:
-        u = create_user_db(str(user_id), username)
-    return u
-
-def update_coins(user_id: str, new_coin: int):
+def update_user_field(user_id: str, fields: dict):
     try:
-        _client().from_("manager_user").update({"coin": new_coin}).eq("name_user", str(user_id)).execute()
+        _client().from_("manager_user").update(fields).eq("name_user", str(user_id)).execute()
     except Exception as e:
-        log.error(f"update_coins: {e}")
+        log.error(f"update_user_field error: {e}")
 
 def add_coins(user_id: str, amount: int) -> int:
-    u = get_user_db(str(user_id))
+    u = get_user(str(user_id))
     if not u:
         return 0
     new_coin = (u.get("coin") or 0) + amount
-    update_coins(str(user_id), new_coin)
+    update_user_field(str(user_id), {"coin": new_coin})
     return new_coin
 
-def spend_coins(user_id: str, amount: int):
-    """Trừ xu. Trả về (True, new_balance) hoặc (False, current_balance)."""
-    u = get_user_db(str(user_id))
+def spend_coins(user_id: str, amount: int) -> tuple[bool, int]:
+    u = get_user(str(user_id))
     if not u:
         return False, 0
-    current = u.get("coin") or 0
-    if current < amount:
-        return False, current
-    new_coin = current - amount
-    update_coins(str(user_id), new_coin)
+    cur = u.get("coin") or 0
+    if cur < amount:
+        return False, cur
+    new_coin = cur - amount
+    update_user_field(str(user_id), {"coin": new_coin})
     return True, new_coin
 
-def increment_image_count(user_id: str):
-    u = get_user_db(str(user_id))
-    if not u:
-        return
-    n = (u.get("number_create_image") or 0) + 1
-    _client().from_("manager_user").update({"number_create_image": n}).eq("name_user", str(user_id)).execute()
+def inc_image_count(user_id: str):
+    u = get_user(str(user_id))
+    if u:
+        update_user_field(str(user_id), {
+            "number_create_image": (u.get("number_create_image") or 0) + 1
+        })
 
-def increment_video_count(user_id: str):
-    u = get_user_db(str(user_id))
-    if not u:
-        return
-    n = (u.get("number_create_video") or 0) + 1
-    _client().from_("manager_user").update({"number_create_video": n}).eq("name_user", str(user_id)).execute()
+def inc_video_count(user_id: str):
+    u = get_user(str(user_id))
+    if u:
+        update_user_field(str(user_id), {
+            "number_create_video": (u.get("number_create_video") or 0) + 1
+        })
 
-def increment_proxy_count(user_id: str):
-    u = get_user_db(str(user_id))
-    if not u:
-        return
-    n = (u.get("proxy") or 0) + 1
-    _client().from_("manager_user").update({"proxy": n}).eq("name_user", str(user_id)).execute()
-
-def update_package(user_id: str, package: str, purchase_date: str = None):
-    try:
-        data = {
-            "package"      : package,
-            "purchase_date": purchase_date or datetime.now().isoformat(),
-        }
-        _client().from_("manager_user").update(data).eq("name_user", str(user_id)).execute()
-    except Exception as e:
-        log.error(f"update_package: {e}")
-
-def set_status(user_id: str, status: str):
-    """status: idle | processing | waiting"""
-    try:
-        _client().from_("manager_user").update({"status": status}).eq("name_user", str(user_id)).execute()
-    except Exception as e:
-        log.error(f"set_status: {e}")
-
-def set_waiting_number(user_id: str, number: int):
-    try:
-        _client().from_("manager_user").update({"waiting": number}).eq("name_user", str(user_id)).execute()
-    except Exception as e:
-        log.error(f"set_waiting_number: {e}")
+def inc_proxy(user_id: str):
+    u = get_user(str(user_id))
+    if u:
+        update_user_field(str(user_id), {
+            "proxy": (u.get("proxy") or 0) + 1
+        })
 
 # ══════════════════════════════════════════════
-#  CLOTHES AI — SLOT MANAGER
+#  PACKAGE / PAYMENT
 # ══════════════════════════════════════════════
 
-def get_active_slots() -> list:
-    """Lấy danh sách user đang processing trong clothesAI."""
+def set_package(user_id: str, package: str):
+    update_user_field(str(user_id), {
+        "package":       package,
+        "purchase_date": datetime.now().isoformat(),
+    })
+
+def record_payment(user_id: str, username: str, package_or_coin: str, amount_vnd: int):
+    """Ghi lịch sử thanh toán vào bảng payment."""
     try:
-        res = _client().from_("clothesAI").select("*").execute()
-        return res.data or []
+        _client().from_("payment").insert({
+            "name_user":  str(user_id),
+            "username":   username,
+            "type":       package_or_coin,
+            "amount_vnd": amount_vnd,
+            "created_at": datetime.now().isoformat(),
+        }).execute()
     except Exception as e:
-        log.error(f"get_active_slots: {e}")
-        return []
+        log.error(f"record_payment error: {e}")
 
-def count_active_slots() -> int:
-    return len(get_active_slots())
+# ══════════════════════════════════════════════
+#  CLOTHESAI QUEUE (real queue table)
+# ══════════════════════════════════════════════
 
-def add_to_clothesAI(user_id: str) -> bool:
-    """Thêm user vào clothesAI (đang xử lý). Trả về True nếu thành công."""
+def get_active_slots() -> int:
+    """Đếm số slot đang xử lý trong clothesAI."""
     try:
-        active = get_active_slots()
-        if len(active) >= MAX_SLOTS:
+        res = _client().from_("clothesAI").select("status").execute()
+        active = [r for r in (res.data or []) if r.get("status") not in ("{}", "", None)]
+        return len(active)
+    except Exception as e:
+        log.error(f"get_active_slots error: {e}")
+        return 0
+
+def claim_slot(user_id: str) -> bool:
+    """Thử chiếm 1 slot trong clothesAI. Trả True nếu thành công."""
+    try:
+        res = _client().from_("clothesAI").select("*").in_("status", ["{}", ""]).limit(1).execute()
+        if not res.data:
             return False
-        # Kiểm tra đã có chưa
-        ids = [str(r.get("user_id") or r.get("name_user", "")) for r in active]
-        if str(user_id) in ids:
-            return True
-        _client().from_("clothesAI").insert({"user_id": str(user_id), "status": "processing"}).execute()
+        row_id = res.data[0]["id"]
+        _client().from_("clothesAI").update({
+            "status": str(user_id)
+        }).eq("id", row_id).execute()
+        update_user_field(str(user_id), {"status": "processing"})
         return True
     except Exception as e:
-        log.error(f"add_to_clothesAI: {e}")
+        log.error(f"claim_slot error: {e}")
         return False
 
-def remove_from_clothesAI(user_id: str):
-    """Xoá user khỏi clothesAI khi xong việc."""
+def release_slot(user_id: str):
+    """Giải phóng slot sau khi xử lý xong."""
     try:
-        _client().from_("clothesAI").delete().eq("user_id", str(user_id)).execute()
+        _client().from_("clothesAI").update({"status": "{}"}).eq("status", str(user_id)).execute()
+        update_user_field(str(user_id), {"status": "idle", "waiting": 0})
     except Exception as e:
-        log.error(f"remove_from_clothesAI: {e}")
+        log.error(f"release_slot error: {e}")
 
-# ══════════════════════════════════════════════
-#  PAYMENT
-# ══════════════════════════════════════════════
-
-def insert_payment(user_id: str, username: str, payment_type: str, package_or_amount: str, price: int):
-    """
-    payment_type: 'coin' | 'package'
-    package_or_amount: tên gói hoặc số xu
-    """
+def get_queue_position(user_id: str) -> int:
+    """Trả về vị trí trong hàng chờ (0 = đang xử lý)."""
     try:
-        data = {
-            "name_user"   : str(user_id),
-            "username"    : username,
-            "type"        : payment_type,
-            "package"     : package_or_amount,
-            "price"       : price,
-            "status"      : "pending",
-            "created_at"  : datetime.now().isoformat(),
-        }
-        _client().from_("payment").insert(data).execute()
-    except Exception as e:
-        log.error(f"insert_payment: {e}")
+        u = get_user(str(user_id))
+        return u.get("waiting", 0) if u else 0
+    except:
+        return 0
 
-def confirm_payment(user_id: str, payment_type: str):
-    """Admin xác nhận thanh toán."""
-    try:
-        _client().from_("payment").update({"status": "confirmed"}).eq("name_user", str(user_id)).eq("type", payment_type).eq("status", "pending").execute()
-    except Exception as e:
-        log.error(f"confirm_payment: {e}")
+def set_waiting(user_id: str, pos: int):
+    update_user_field(str(user_id), {"waiting": pos})
