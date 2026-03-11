@@ -132,21 +132,37 @@ def inc_proxy(user_id: str):
 
 # ── PACKAGE / PAYMENT ────────────────────────────
 
-def set_package(user_id: str, package: str):
-    update_user_field(str(user_id), {
+def set_package(user_id: str, username: str, package: str):
+    """Cập nhật package trong manager_user và ghi vào bảng package."""
+    update_user_field(str(user_id), {"package": package})
+    _insert("package", {
+        "username":      username,
         "package":       package,
         "purchase_date": datetime.now().isoformat(),
     })
 
-def record_payment(user_id: str, username: str, package_or_coin: str, amount_vnd: int):
+def record_payment(user_id: str, username: str, pkg_id: str, amount_vnd: int):
+    """
+    Bảng payment: id, username, pay_package, pay_coin
+    Bảng package: id, username, package, purchase_date
+    """
+    # Xác định là mua xu hay mua package
+    is_coin = pkg_id.startswith("coin")
+
+    # Ghi vào bảng payment
     _insert("payment", {
-        "name_user":  str(user_id),
-        "username":   username,
-        "type":       package_or_coin,
-        "amount_vnd": amount_vnd,
-        "status":     "pending",
-        "created_at": datetime.now().isoformat(),
+        "username":    username,
+        "pay_package": "" if is_coin else pkg_id,
+        "pay_coin":    amount_vnd if is_coin else 0,
     })
+
+    # Nếu mua package → ghi thêm vào bảng package
+    if not is_coin:
+        _insert("package", {
+            "username":      username,
+            "package":       pkg_id,
+            "purchase_date": datetime.now().isoformat(),
+        })
 
 # ── CLOTHESAI QUEUE ──────────────────────────────
 

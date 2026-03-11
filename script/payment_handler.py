@@ -277,12 +277,12 @@ async def handle_payment_callback(d: str, q, u, user_db: dict,
             await q.answer("Gói không hợp lệ!", show_alert=True)
             return
 
-        # Ghi vào bảng payment (trạng thái pending)
+        # Ghi vào bảng payment + package (nếu là VIP)
         record_payment(
-            user_id   = str(u.id),
-            username  = username,
-            package_or_coin = pkg_id,
-            amount_vnd      = pkg["vnd"],
+            user_id    = str(u.id),
+            username   = username,
+            pkg_id     = pkg_id,
+            amount_vnd = pkg["vnd"],
         )
 
         # Thông báo cho bot payment (nếu có token riêng)
