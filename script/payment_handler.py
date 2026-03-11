@@ -342,17 +342,37 @@ async def handle_payment_callback(d: str, q, u, user_db: dict, sessions_db: dict
         uid = str(u.id)
         if uid not in sessions_db:
             sessions_db[uid] = {}
-        sessions_db[uid]["state"]            = "wait_payment_photo"
-        sessions_db[uid]["pending_pkg_id"]   = pkg_id
+        sessions_db[uid]["state"]             = "wait_payment_photo"
+        sessions_db[uid]["pending_pkg_id"]    = pkg_id
         sessions_db[uid]["pending_pkg_label"] = pkg["label"]
 
-        await q.edit_message_text(
-            msg_wait_photo(pkg["label"]),
-            reply_markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("❌ Hủy", callback_data="pay_menu")]
-            ]),
-            parse_mode = "MarkdownV2"
-        )
+        kb_cancel_pay = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Hủy", callback_data="pay_menu")]
+        ])
+        txt = msg_wait_photo(pkg["label"])
+
+        # Tin nhắn hiện tại có thể là ảnh (QR) → không edit_message_text được
+        # Thử edit caption trước, nếu không được thì reply tin nhắn mới
+        try:
+            await q.edit_message_caption(
+                caption      = txt,
+                reply_markup = kb_cancel_pay,
+                parse_mode   = "MarkdownV2",
+            )
+        except Exception:
+            try:
+                await q.edit_message_text(
+                    txt,
+                    reply_markup = kb_cancel_pay,
+                    parse_mode   = "MarkdownV2",
+                )
+            except Exception:
+                await q.message.reply_text(
+                    txt,
+                    reply_markup = kb_cancel_pay,
+                    parse_mode   = "MarkdownV2",
+                )
+        await q.answer()
         return
 
 
