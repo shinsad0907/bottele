@@ -72,16 +72,16 @@ def get_or_create_user(user_id: str, username: str = "") -> dict:
         return u
     # KHÔNG có id — Supabase tự tạo uuid
     # KHÔNG insert purchase_date — để Supabase để null mặc định
+    # Chỉ INSERT đúng cột có trong bảng: name_user, coin, number_create_image,
+    # number_create_video, proxy, waiting, package  (không có username/status/purchase_date)
     data = {
         "name_user":           str(user_id),
-        "username":            username or str(user_id),
         "coin":                INIT_COINS,
         "number_create_image": 0,
         "number_create_video": 0,
         "proxy":               0,
         "waiting":             0,
         "package":             "free",
-        "status":              "idle",
     }
     result = _insert("manager_user", data)
     log.info(f"[DB] Created user {user_id} → {result}")
@@ -168,7 +168,6 @@ def claim_slot(user_id: str) -> bool:
             return False
         row_id = rows[0]["id"]
         _update("clothesAI", {"id": row_id}, {"status": str(user_id)})
-        update_user_field(str(user_id), {"status": "processing"})
         return True
     except Exception as e:
         log.error(f"claim_slot error: {e}")
@@ -177,6 +176,6 @@ def claim_slot(user_id: str) -> bool:
 def release_slot(user_id: str):
     try:
         _update("clothesAI", {"status": str(user_id)}, {"status": "{}"})
-        update_user_field(str(user_id), {"status": "idle", "waiting": 0})
+        update_user_field(str(user_id), {"waiting": 0})
     except Exception as e:
         log.error(f"release_slot error: {e}")
