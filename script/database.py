@@ -75,11 +75,31 @@ def _update(table: str, filters: dict, data: dict) -> bool:
 
 def get_user(user_id: str) -> dict | None:
     rows = _select("manager_user", {"id_user": str(user_id)})
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    u = rows[0]
+    # Normalize package: "VIP" → "vip", "VIP_PRO"/"VIP PRE"/"VIP_PRE" → "vip_pro"
+    if u.get("package"):
+        pkg = u["package"].lower().strip().replace(" ", "_")
+        if "pre" in pkg or "pro" in pkg:
+            pkg = "vip_pro"
+        elif "vip" in pkg:
+            pkg = "vip"
+        else:
+            pkg = "free"
+        u["package"] = pkg
+    return u
+
+def _normalize_user(u: dict) -> dict:
+    """Normalize các field từ DB về đúng format code dùng."""
+    if u and u.get("package"):
+        u["package"] = u["package"].lower().replace(" ", "_").replace("pre", "pro")
+    return u
 
 def get_or_create_user(user_id: str, username: str = "") -> dict:
     u = get_user(str(user_id))
     if u:
+        u = _normalize_user(u)
         # Cập nhật username nếu thay đổi
         stored_uname = u.get("username", "")
         clean_uname = username.lstrip("@") if username else ""
