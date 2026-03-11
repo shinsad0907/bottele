@@ -2,6 +2,7 @@
 payment_handler.py
 ------------------
 Xử lý mua xu và mua package VIP.
+Sau khi user gửi xác nhận + ảnh CK → thông báo admin bot kèm ảnh.
 
 Giá xu:
   10.000đ  → 200 xu   (10 ảnh)
@@ -16,7 +17,7 @@ Giá VIP:
 """
 import logging
 from telegram import (
-    InlineKeyboardButton, InlineKeyboardMarkup, Update
+    InlineKeyboardButton, InlineKeyboardMarkup, Update, Bot as TGBot
 )
 from telegram.ext import ContextTypes
 
@@ -26,6 +27,10 @@ log = logging.getLogger(__name__)
 #  CONFIG
 # ══════════════════════════════════════════════
 QR_IMAGE_PATH = "image/qr.png"   # ảnh QR chuyển khoản
+
+# Bot admin nhận thông báo thanh toán
+ADMIN_BOT_TOKEN = "8712430335:AAGBsFNLflx7BXZpjgQ_fMesAqF76gAgUCk"
+ADMIN_CHAT_ID   = 5933186992   # chat_id của @shadowbotnet99
 
 COIN_PACKAGES = [
     {"id": "coin_10k",  "vnd": 10_000,  "coin": 200,  "image": 10,  "label": "200 xu  · 10 ảnh"},
@@ -68,9 +73,9 @@ def esc(text: str) -> str:
 
 def kb_payment_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💰 Mua Xu",         callback_data="pay_coin_menu")],
-        [InlineKeyboardButton("👑 Mua VIP / VIP PRO", callback_data="pay_vip_menu")],
-        [InlineKeyboardButton("◀️ Quay Về",         callback_data="home")],
+        [InlineKeyboardButton("💰 Mua Xu",             callback_data="pay_coin_menu")],
+        [InlineKeyboardButton("👑 Mua VIP / VIP PRO",  callback_data="pay_vip_menu")],
+        [InlineKeyboardButton("◀️ Quay Về",             callback_data="home")],
     ])
 
 def kb_coin_menu():
@@ -95,8 +100,8 @@ def kb_vip_menu():
 
 def kb_confirm_payment(pkg_id: str):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Tôi Đã Chuyển Khoản", callback_data=f"pay_confirm_{pkg_id}")],
-        [InlineKeyboardButton("❌ Hủy",                  callback_data="pay_menu")],
+        [InlineKeyboardButton("📸 Gửi Ảnh Chuyển Khoản", callback_data=f"pay_sendphoto_{pkg_id}")],
+        [InlineKeyboardButton("❌ Hủy",                   callback_data="pay_menu")],
     ])
 
 def kb_after_pay_confirm():
@@ -154,8 +159,6 @@ def msg_vip_menu() -> str:
     )
 
 def msg_payment_qr(username: str, pkg_id: str, vnd: int, label: str) -> str:
-    """Nội dung tin nhắn kèm QR để chuyển khoản."""
-    # Phân biệt nội dung chuyển khoản
     if pkg_id.startswith("coin"):
         content = f"@{username} \\- mua xu"
     else:
@@ -178,8 +181,21 @@ def msg_payment_qr(username: str, pkg_id: str, vnd: int, label: str) -> str:
         "```\n\n"
         "📸 *Quét mã QR bên dưới để chuyển khoản*\n\n"
         "⚠️ Sau khi chuyển khoản, bấm:\n"
-        "*✅ Tôi Đã Chuyển Khoản*\n"
-        "Admin sẽ duyệt và cộng xu trong *5\\-15 phút*\\."
+        "*📸 Gửi Ảnh Chuyển Khoản*\n"
+        "để gửi ảnh bill CK cho admin xác nhận\\."
+    )
+
+def msg_wait_photo(label: str) -> str:
+    return (
+        "```\n"
+        "╔══════════════════════════════════════╗\n"
+        "║  📸  GỬI ẢNH CHUYỂN KHOẢN  📸      ║\n"
+        "╠══════════════════════════════════════╣\n"
+        "╚══════════════════════════════════════╝\n"
+        "```\n\n"
+        f"📦 Gói: *{esc(label)}*\n\n"
+        "📲 *Vui lòng gửi ảnh chụp màn hình bill chuyển khoản vào chat này\\.*\n\n"
+        "⏳ Admin sẽ duyệt trong *5\\-15 phút* sau khi nhận ảnh\\."
     )
 
 def msg_pending_confirm(label: str) -> str:
@@ -191,24 +207,70 @@ def msg_pending_confirm(label: str) -> str:
         "╚══════════════════════════════════════╝\n"
         "```\n\n"
         f"✅ Đã ghi nhận yêu cầu mua: *{esc(label)}*\n\n"
-        "📋 Thông tin của bạn đã được gửi tới admin\\.\n"
+        "📋 Ảnh CK và thông tin của bạn đã được gửi tới admin\\.\n"
         "⏱ Admin sẽ duyệt trong *5\\-15 phút*\\.\n\n"
         "💡 Nếu sau 30 phút chưa nhận được xu, liên hệ hỗ trợ\\."
     )
 
 
 # ══════════════════════════════════════════════
+#  ADMIN NOTIFICATION
+# ══════════════════════════════════════════════
+
+async def notify_admin_payment(username: str, user_id: int,
+                                pkg: dict, pkg_id: str,
+                                photo_file_id: str | None = None):
+    """Gửi thông báo thanh toán tới ADMIN_CHAT_ID qua ADMIN_BOT_TOKEN.
+    Nếu có photo_file_id thì gửi kèm ảnh CK."""
+    try:
+        import datetime as _dt
+        vn_now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=7)))
+        pkg_type = "mua xu" if pkg_id.startswith("coin") else "VIP package"
+
+        caption = (
+            f"💳 *YÊU CẦU THANH TOÁN MỚI*\n\n"
+            f"👤 @{esc(username)} \\(`{user_id}`\\)\n"
+            f"📦 Gói: `{esc(pkg['label'])}`\n"
+            f"💵 Số tiền: `{pkg['vnd']:,}đ`\n"
+            f"📝 Loại: *{pkg_type}*\n"
+            f"🕐 `{vn_now.strftime('%H:%M %d/%m/%Y')}`\n\n"
+            f"⚡ Dùng lệnh để duyệt:\n"
+            f"`/addcoins @{username} <số xu>`\n"
+            f"`/setpackage @{username} vip`\n"
+            f"`/setpackage @{username} vip_pro`"
+        )
+
+        admin_bot = TGBot(token=ADMIN_BOT_TOKEN)
+        async with admin_bot:
+            if photo_file_id:
+                await admin_bot.send_photo(
+                    chat_id    = ADMIN_CHAT_ID,
+                    photo      = photo_file_id,
+                    caption    = caption,
+                    parse_mode = "MarkdownV2",
+                )
+            else:
+                await admin_bot.send_message(
+                    chat_id    = ADMIN_CHAT_ID,
+                    text       = caption,
+                    parse_mode = "MarkdownV2",
+                )
+        log.info(f"[PayNotify] Sent to admin for @{username}")
+    except Exception as e:
+        log.error(f"notify_admin_payment error: {e}")
+
+
+# ══════════════════════════════════════════════
 #  HANDLER (gọi từ btn() trong bottele.py)
 # ══════════════════════════════════════════════
 
-async def handle_payment_callback(d: str, q, u, user_db: dict,
-                                  payment_bot_token: str | None = None):
+async def handle_payment_callback(d: str, q, u, user_db: dict, sessions_db: dict):
     """
-    d          : callback_data
-    q          : CallbackQuery
-    u          : telegram User
-    user_db    : dict từ database.get_or_create_user
-    payment_bot_token: (tuỳ chọn) token bot payment riêng để gửi thông báo
+    d           : callback_data
+    q           : CallbackQuery
+    u           : telegram User
+    user_db     : dict từ database.get_or_create_user
+    sessions_db : dict lưu session (để set state chờ ảnh CK)
     """
     from script.database import record_payment
 
@@ -254,61 +316,87 @@ async def handle_payment_callback(d: str, q, u, user_db: dict,
         try:
             with open(QR_IMAGE_PATH, "rb") as f:
                 await q.message.reply_photo(
-                    photo=f,
-                    caption=caption,
-                    parse_mode="MarkdownV2",
-                    reply_markup=kb_confirm_payment(pkg_id)
+                    photo        = f,
+                    caption      = caption,
+                    parse_mode   = "MarkdownV2",
+                    reply_markup = kb_confirm_payment(pkg_id)
                 )
             await q.answer()
         except FileNotFoundError:
-            # Nếu chưa có file QR thì gửi text
             await q.edit_message_text(
                 caption,
-                reply_markup=kb_confirm_payment(pkg_id),
-                parse_mode="MarkdownV2"
+                reply_markup = kb_confirm_payment(pkg_id),
+                parse_mode   = "MarkdownV2"
             )
         return
 
-    # ── User bấm "Đã chuyển khoản" ──
-    if d.startswith("pay_confirm_"):
-        pkg_id = d[len("pay_confirm_"):]
+    # ── User bấm "Gửi Ảnh Chuyển Khoản" ──
+    if d.startswith("pay_sendphoto_"):
+        pkg_id = d[len("pay_sendphoto_"):]
         pkg = COIN_MAP.get(pkg_id) or VIP_MAP.get(pkg_id)
         if not pkg:
             await q.answer("Gói không hợp lệ!", show_alert=True)
             return
 
-        # Ghi vào bảng payment + package (nếu là VIP)
-        record_payment(
-            user_id    = str(u.id),
-            username   = username,
-            pkg_id     = pkg_id,
-            amount_vnd = pkg["vnd"],
-        )
-
-        # Thông báo cho bot payment (nếu có token riêng)
-        if payment_bot_token:
-            try:
-                from telegram import Bot as TGBot
-                pay_bot = TGBot(token=payment_bot_token)
-                pkg_type = "mua xu" if pkg_id.startswith("coin") else "package"
-                notify_text = (
-                    f"💳 *YÊU CẦU THANH TOÁN MỚI*\n\n"
-                    f"👤 @{username} \\(`{u.id}`\\)\n"
-                    f"📦 Gói: `{pkg['label']}`\n"
-                    f"💵 Số tiền: `{pkg['vnd']:,}đ`\n"
-                    f"📝 Loại: *{pkg_type}*\n"
-                    f"🕐 `{__import__('datetime').datetime.now().strftime('%H:%M %d/%m/%Y')}`"
-                )
-                # Gửi tới admin qua payment bot (cần chat_id admin)
-                # await pay_bot.send_message(chat_id=ADMIN_CHAT_ID, text=notify_text, parse_mode="MarkdownV2")
-                async with pay_bot:
-                    pass  # placeholder
-            except Exception as e:
-                log.error(f"payment_bot notify error: {e}")
+        # Lưu state vào session để chờ ảnh
+        uid = str(u.id)
+        if uid not in sessions_db:
+            sessions_db[uid] = {}
+        sessions_db[uid]["state"]            = "wait_payment_photo"
+        sessions_db[uid]["pending_pkg_id"]   = pkg_id
+        sessions_db[uid]["pending_pkg_label"] = pkg["label"]
 
         await q.edit_message_text(
-            msg_pending_confirm(pkg["label"]),
-            reply_markup=kb_after_pay_confirm(),
-            parse_mode="MarkdownV2"
+            msg_wait_photo(pkg["label"]),
+            reply_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Hủy", callback_data="pay_menu")]
+            ]),
+            parse_mode = "MarkdownV2"
         )
         return
+
+
+async def handle_payment_photo(photo_file_id: str, u, sessions_db: dict):
+    """
+    Gọi khi user gửi ảnh trong trạng thái 'wait_payment_photo'.
+    Ghi DB + thông báo admin kèm ảnh.
+    Trả về (success: bool, label: str)
+    """
+    from script.database import record_payment
+
+    uid     = str(u.id)
+    sess    = sessions_db.get(uid, {})
+    pkg_id  = sess.get("pending_pkg_id")
+    label   = sess.get("pending_pkg_label", "")
+
+    if not pkg_id:
+        return False, ""
+
+    pkg = COIN_MAP.get(pkg_id) or VIP_MAP.get(pkg_id)
+    if not pkg:
+        return False, ""
+
+    username = u.username or str(u.id)
+
+    # Ghi vào DB
+    record_payment(
+        user_id    = uid,
+        username   = username,
+        pkg_id     = pkg_id,
+        amount_vnd = pkg["vnd"],
+    )
+
+    # Thông báo admin kèm ảnh CK
+    await notify_admin_payment(
+        username      = username,
+        user_id       = u.id,
+        pkg           = pkg,
+        pkg_id        = pkg_id,
+        photo_file_id = photo_file_id,
+    )
+
+    # Reset state
+    for key in ("state", "pending_pkg_id", "pending_pkg_label"):
+        sess.pop(key, None)
+
+    return True, label

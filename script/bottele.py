@@ -11,11 +11,15 @@ from script.database       import (
     add_coins as db_add_coins, spend_coins as db_spend_coins,
     inc_image_count, inc_video_count, inc_proxy,
     set_package, record_payment,
+    do_rollcall, ROLLCALL_REWARD,
+    admin_add_coins, admin_set_package, get_user_by_username,
 )
 from script.queue_manager  import enter_queue, leave_queue
 from script.payment_handler import (
     handle_payment_callback,
+    handle_payment_photo,
     kb_payment_menu, msg_payment_menu,
+    msg_pending_confirm, kb_after_pay_confirm,
     COIN_MAP, VIP_MAP,
 )
 
@@ -23,12 +27,14 @@ log = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
 WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-three.vercel.app").rstrip("/")
-BYPASS_REWARD = 20
-COST_IMAGE    = 10
-COST_VIDEO    = 20
+COST_IMAGE    = 20
+COST_VIDEO    = 35
 
 REQUIRED_CHANNEL     = "@ClothessAI"
 REQUIRED_CHANNEL_URL = "https://t.me/ClothessAI"
+
+# Admin duy nhất
+ADMIN_USERNAME = "shadowbotnet99"   # không có @
 
 # ══════════════════════════════════════════════
 #  CHANNEL GATE
@@ -56,7 +62,7 @@ async def send_join_prompt(reply_fn):
     await reply_fn(text, reply_markup=kb, parse_mode="MarkdownV2")
 
 # ══════════════════════════════════════════════
-#  FIREBASE / IMAGE / VIDEO APIs  (giữ nguyên)
+#  FIREBASE / IMAGE / VIDEO APIs
 # ══════════════════════════════════════════════
 FIREBASE_KEY = "AIzaSyDkChmbBT5DiK0HNTA8Ffx8NJq7reWkS6I"
 TEMP_DOMAINS = ["getmule.com", "fivemail.com", "vomoto.com", "mailnull.com"]
@@ -82,7 +88,7 @@ PIKA_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 MAILTM  = "https://api.mail.tm"
 
 # ══════════════════════════════════════════════
-#  RAM SESSION DB  (Vercel stateless → chỉ dùng trong 1 request)
+#  RAM SESSION DB
 # ══════════════════════════════════════════════
 sessions_db: dict = {}
 keys_db:     dict = {}
@@ -104,19 +110,6 @@ def clear_session(uid):
 
 def full_clear_session(uid):
     sessions_db[str(uid)] = {}
-
-def new_key(uid):
-    k = str(uuid.uuid4())
-    keys_db[k] = {"used": False, "uid": str(uid)}
-    return k
-
-def validate_key(k):
-    if k not in keys_db: return "invalid"
-    if keys_db[k]["used"]: return "used"
-    return "valid"
-
-def use_key(k):
-    if k in keys_db: keys_db[k]["used"] = True
 
 # ══════════════════════════════════════════════
 #  UI HELPERS
@@ -177,7 +170,6 @@ def render_video_log(step, total_steps, lines, eta="", tick=0):
 
 BANNER_SUCCESS = "╔══════════════════════════════════════╗\n║  ✅  CLOTHESBOT  ·  SUCCESS  ✅     ║\n╠══════════════════════════════════════╣"
 BANNER_ERROR   = "╔══════════════════════════════════════╗\n║  ⚠️   CLOTHESBOT  ·  ERROR   ⚠️    ║\n╠══════════════════════════════════════╣"
-BANNER_BYPASS  = "╔══════════════════════════════════════╗\n║  🔗  CLOTHESBOT  ·  EARN COINS  💰  ║\n╠══════════════════════════════════════╣"
 BANNER_WALLET  = "╔══════════════════════════════════════╗\n║  💎  CLOTHESBOT  ·  WALLET  💎      ║\n╠══════════════════════════════════════╣"
 
 # ══════════════════════════════════════════════
@@ -205,10 +197,11 @@ SPLASH_F3 = """```
 ╚══════════════════════════════════════╝
 ```"""
 
-def splash_final(name, coins, total_images, total_bypassed, total_videos=0, package="free"):
+def splash_final(name, coins, total_images, total_videos=0, package="free", roll_called=False):
     bar   = coin_bar(coins)
     badge = rank_badge(coins)
     pkg   = pkg_badge(package)
+    rc_status = "✅ Đã điểm danh hôm nay" if roll_called else f"🎁 Chưa điểm danh \\(\\+{ROLLCALL_REWARD} xu\\)"
     return (
         "```\n╔══════════════════════════════════════╗\n"
         "║    ██████╗██╗      ██████╗ ████████╗ ║\n"
@@ -224,11 +217,11 @@ def splash_final(name, coins, total_images, total_bypassed, total_videos=0, pack
         f"│  💰 Xu: `{coins}` {bar}\n"
         f"│  🎨 Ảnh đã tạo:   `{total_images}`\n"
         f"│  🎬 Video đã tạo: `{total_videos}`\n"
-        f"│  🔗 Lượt kiếm xu: `{total_bypassed}`\n"
+        f"│  📅 {rc_status}\n"
         f"└────────────────────────────────┘\n\n"
         f"⚡ Chi phí tạo ảnh: `{COST_IMAGE} xu / lần`\n"
         f"🎬 Chi phí tạo video: `{COST_VIDEO} xu / lần`\n"
-        f"🎁 Thưởng mỗi link: `+{BYPASS_REWARD} xu`\n\n"
+        f"📅 Điểm danh hàng ngày: `+{ROLLCALL_REWARD} xu`\n\n"
         f"👇 *Chọn tính năng bên dưới:*"
     )
 
@@ -245,14 +238,14 @@ async def animated_splash(message_obj, tg_user, user_db: dict):
         tg_user.first_name or "bạn",
         user_db.get("coin", INIT_COINS),
         user_db.get("number_create_image", 0),
-        user_db.get("proxy", 0),
         user_db.get("number_create_video", 0),
         user_db.get("package", "free"),
+        user_db.get("roll_call", False),
     )
     try:
         await m.edit_text(
             final,
-            reply_markup=kb_main(user_db.get("coin", INIT_COINS), user_db.get("package","free")),
+            reply_markup=kb_main(user_db.get("coin", INIT_COINS), user_db.get("package","free"), user_db.get("roll_call", False)),
             parse_mode="MarkdownV2"
         )
     except: pass
@@ -261,16 +254,17 @@ async def animated_splash(message_obj, tg_user, user_db: dict):
 # ══════════════════════════════════════════════
 #  KEYBOARDS
 # ══════════════════════════════════════════════
-def kb_main(coins, package="free"):
-    badge = rank_badge(coins)
-    pkg   = pkg_badge(package)
+def kb_main(coins, package="free", roll_called=False):
+    badge     = rank_badge(coins)
+    pkg       = pkg_badge(package)
+    rc_label  = "✅ Đã Điểm Danh" if roll_called else "📅 Điểm Danh (+100xu)"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
         [InlineKeyboardButton("🎨 ✨  TẠO ẢNH  ✨ 🎨",     callback_data="img_start")],
         [InlineKeyboardButton("🎬 ✨  TẠO VIDEO  ✨ 🎬",    callback_data="vid_start")],
         [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
         [InlineKeyboardButton("💎 Ví Xu",                   callback_data="balance"),
-         InlineKeyboardButton("🔗 Kiếm Xu",                 callback_data="bypass")],
+         InlineKeyboardButton(rc_label,                     callback_data="rollcall")],
         [InlineKeyboardButton("💳 Mua Xu / VIP",            callback_data="pay_menu")],
         [InlineKeyboardButton("📊 Thống Kê",                callback_data="stats"),
          InlineKeyboardButton("📖 Hướng Dẫn",               callback_data="help")],
@@ -300,24 +294,14 @@ def kb_after_video(coins):
         [InlineKeyboardButton(f"💰 Còn lại: {coins} xu", callback_data="balance")],
     ])
 
-def kb_after_key(coins):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎨 Tạo Ảnh Ngay!", callback_data="img_start"),
-         InlineKeyboardButton("🎬 Tạo Video Ngay!", callback_data="vid_start")],
-        [InlineKeyboardButton("🔗 Kiếm Thêm Xu",   callback_data="bypass"),
-         InlineKeyboardButton("🏠 Menu",            callback_data="home")],
-        [InlineKeyboardButton(f"💰 Số dư: {coins} xu", callback_data="balance")],
-    ])
-
 # ══════════════════════════════════════════════
 #  MESSAGE BUILDERS
 # ══════════════════════════════════════════════
-def msg_balance(full_name, uid, coins, total_images, total_bypassed, total_videos=0, package="free"):
+def msg_balance(full_name, uid, coins, total_images, total_videos=0, package="free"):
     bar   = coin_bar(coins)
     badge = rank_badge(coins)
     pkg   = pkg_badge(package)
     spent = total_images * COST_IMAGE + total_videos * COST_VIDEO
-    earned = total_bypassed * BYPASS_REWARD
     return (
         f"```\n{BANNER_WALLET}\n```\n\n"
         f"👤 *{esc(full_name or 'User')}*\n🆔 ID: `{uid}`\n\n"
@@ -325,31 +309,14 @@ def msg_balance(full_name, uid, coins, total_images, total_bypassed, total_video
         f"│  {badge}  ·  {pkg}\n"
         f"│  💰 Xu hiện có: `{coins} xu`\n"
         f"│  {bar}\n└──────────────────────────────┘\n\n"
-        f"┌─ 📈 *LỊCH SỬ GIAO DỊCH* ────┐\n"
+        f"┌─ 📈 *LỊCH SỬ* ──────────────┐\n"
         f"│  🎨 Ảnh đã tạo:   `{total_images}` lần\n"
         f"│  🎬 Video đã tạo: `{total_videos}` lần\n"
         f"│  💸 Đã chi:       `{spent} xu`\n"
-        f"│  🔗 Đã kiếm:     `{total_bypassed}` lần\n"
-        f"│  💵 Tổng nhận:    `{earned + INIT_COINS} xu`\n"
         f"└──────────────────────────────┘"
     )
 
-def msg_bypass(link):
-    return (
-        f"```\n{BANNER_BYPASS}\n```\n\n"
-        f"🎁 *Phần thưởng:* `+{BYPASS_REWARD} xu` mỗi lần\\!\n\n"
-        f"📋 *Hướng dẫn nhanh:*\n"
-        f"┌──────────────────────────────┐\n"
-        f"│  1️⃣  Bấm nút link bên dưới   │\n"
-        f"│  2️⃣  Hoàn thành trên web      │\n"
-        f"│  3️⃣  Sao chép mã KEY          │\n"
-        f"│  4️⃣  Bấm \"Nhập Key\" → dán vào│\n"
-        f"└──────────────────────────────┘\n\n"
-        f"⚠️ *Lưu ý:* Mỗi key chỉ dùng *1 lần*\n"
-        f"🔑 Key có dạng: `xxxxxxxx\\-xxxx\\-xxxx\\-xxxx\\-xxxxxxxxxxxx`"
-    )
-
-def msg_stats(uid, coins, total_images, total_bypassed, total_videos=0, package="free"):
+def msg_stats(uid, coins, total_images, total_videos=0, package="free"):
     badge = rank_badge(coins)
     pkg   = pkg_badge(package)
     spent = total_images * COST_IMAGE + total_videos * COST_VIDEO
@@ -358,12 +325,10 @@ def msg_stats(uid, coins, total_images, total_bypassed, total_videos=0, package=
         f"🆔 ID: `{uid}`\n🏆 Hạng: *{badge}*  ·  {pkg}\n\n"
         f"┌─ 💰 *COINS* ─────────────────┐\n"
         f"│  Hiện có:   `{coins} xu`\n│  {coin_bar(coins)}\n"
-        f"│  Đã kiếm:   `{total_bypassed * BYPASS_REWARD + INIT_COINS} xu` tổng\n"
         f"│  Đã tiêu:   `{spent} xu`\n└──────────────────────────────┘\n\n"
         f"┌─ 👗 *HOẠT ĐỘNG* ─────────────┐\n"
         f"│  🎨 Ảnh đã tạo:   `{total_images}` lần\n"
         f"│  🎬 Video đã tạo: `{total_videos}` lần\n"
-        f"│  🔗 Link đã dùng: `{total_bypassed}` lần\n"
         f"└──────────────────────────────┘"
     )
 
@@ -376,10 +341,11 @@ def msg_help():
         f"🎬 ✨ *TẠO VIDEO*\n"
         f"1\\. Bấm `🎬 ✨ Tạo Video`\n2\\. Gửi ảnh\n3\\. Nhập mô tả chuyển động\n"
         f"4\\. Đợi ~2\\-5 phút\n💰 Chi phí: `{COST_VIDEO} xu` / lần\n\n"
+        f"📅 *ĐIỂM DANH*\nBấm `📅 Điểm Danh` mỗi ngày để nhận `\\+{ROLLCALL_REWARD} xu`\n"
+        f"Reset lúc 00:00 giờ Việt Nam\\.\n\n"
         f"💳 *MUA XU / VIP*\n"
-        f"Bấm `💳 Mua Xu / VIP` → chọn gói → chuyển khoản → bấm xác nhận\n\n"
-        f"🔗 *KIẾM XU*\nBấm `🔗 Kiếm Xu` → vào link → lấy key → nhập vào bot\n"
-        f"🎁 `+{BYPASS_REWARD} xu` / lần"
+        f"Bấm `💳 Mua Xu / VIP` → chọn gói → chuyển khoản → gửi ảnh bill\n"
+        f"Admin duyệt trong 5\\-15 phút\\."
     )
 
 # ══════════════════════════════════════════════
@@ -460,7 +426,7 @@ def generate_image(image_bytes, filename, prompt, log_cb=None):
     return img_resp.content
 
 # ══════════════════════════════════════════════
-#  VIDEO API (giữ nguyên từ bản gốc)
+#  VIDEO API
 # ══════════════════════════════════════════════
 def _mailtm_create_account():
     domain = requests.get(f"{MAILTM}/domains", timeout=10).json()["hydra:member"][0]["domain"]
@@ -628,6 +594,93 @@ def pika_create_account_and_generate(image_bytes, filename, prompt="gentle movem
     return video_bytes, video_url
 
 # ══════════════════════════════════════════════
+#  ADMIN COMMANDS (chỉ @shadowbotnet99)
+# ══════════════════════════════════════════════
+
+def is_admin(u) -> bool:
+    return (u.username or "").lower() == ADMIN_USERNAME.lower()
+
+async def cmd_addcoins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not is_admin(u):
+        await update.message.reply_text("⛔ Bạn không có quyền dùng lệnh này.")
+        return
+    # /addcoins @username <số xu>
+    args = ctx.args
+    if len(args) < 2:
+        await update.message.reply_text("❌ Cú pháp: `/addcoins @username <số xu>`", parse_mode="MarkdownV2")
+        return
+    target = args[0].lstrip("@")
+    try:
+        amount = int(args[1])
+    except ValueError:
+        await update.message.reply_text("❌ Số xu phải là số nguyên.")
+        return
+
+    ok, new_coin = admin_add_coins(target, amount)
+    if ok:
+        await update.message.reply_text(
+            f"✅ Đã thêm `{amount}` xu cho `@{esc(target)}`\\.\n"
+            f"💰 Số dư mới: `{new_coin}` xu",
+            parse_mode="MarkdownV2"
+        )
+    else:
+        await update.message.reply_text(f"❌ Không tìm thấy user `@{esc(target)}`\\.", parse_mode="MarkdownV2")
+
+async def cmd_setpackage(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not is_admin(u):
+        await update.message.reply_text("⛔ Bạn không có quyền dùng lệnh này.")
+        return
+    # /setpackage @username free|vip|vip_pro
+    args = ctx.args
+    if len(args) < 2:
+        await update.message.reply_text("❌ Cú pháp: `/setpackage @username free|vip|vip_pro`", parse_mode="MarkdownV2")
+        return
+    target  = args[0].lstrip("@")
+    package = args[1].lower()
+    if package not in ("free", "vip", "vip_pro"):
+        await update.message.reply_text("❌ Package hợp lệ: `free`, `vip`, `vip_pro`", parse_mode="MarkdownV2")
+        return
+
+    ok = admin_set_package(target, package)
+    if ok:
+        pkg_label = {"free":"🆓 FREE","vip":"👑 VIP","vip_pro":"💎 VIP PRO"}.get(package, package)
+        await update.message.reply_text(
+            f"✅ Đã cập nhật gói `@{esc(target)}` → *{pkg_label}*",
+            parse_mode="MarkdownV2"
+        )
+    else:
+        await update.message.reply_text(f"❌ Không tìm thấy user `@{esc(target)}`\\.", parse_mode="MarkdownV2")
+
+async def cmd_userinfo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not is_admin(u):
+        await update.message.reply_text("⛔ Bạn không có quyền dùng lệnh này.")
+        return
+    args = ctx.args
+    if not args:
+        await update.message.reply_text("❌ Cú pháp: `/userinfo @username`", parse_mode="MarkdownV2")
+        return
+    target = args[0].lstrip("@")
+    data   = get_user_by_username(target)
+    if not data:
+        await update.message.reply_text(f"❌ Không tìm thấy `@{esc(target)}`\\.", parse_mode="MarkdownV2")
+        return
+    pkg   = pkg_badge(data.get("package","free"))
+    badge = rank_badge(data.get("coin",0))
+    await update.message.reply_text(
+        f"👤 *@{esc(target)}*\n"
+        f"🆔 ID: `{data.get('id_user','')}`\n"
+        f"💰 Xu: `{data.get('coin',0)}`\n"
+        f"🏆 {badge}  ·  {pkg}\n"
+        f"🎨 Ảnh: `{data.get('number_create_image',0)}`\n"
+        f"🎬 Video: `{data.get('number_create_video',0)}`\n"
+        f"📅 Roll call: `{data.get('roll_call',False)}`",
+        parse_mode="MarkdownV2"
+    )
+
+# ══════════════════════════════════════════════
 #  HANDLERS
 # ══════════════════════════════════════════════
 
@@ -636,17 +689,16 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await check_join(ctx.bot, u.id):
         await send_join_prompt(lambda text, **kw: update.message.reply_text(text, **kw))
         return
-    # ── Lưu / lấy user từ Supabase ──
     user_db = get_or_create_user(str(u.id), u.username or "")
     full_clear_session(u.id)
     await animated_splash(update.message, u, user_db)
 
 
 async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q    = update.callback_query
+    q = update.callback_query
     await q.answer()
-    d    = q.data
-    u    = q.from_user
+    d = q.data
+    u = q.from_user
 
     if d == "noop": return
 
@@ -659,10 +711,10 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 splash_final(u.first_name or "bạn",
                              user_db.get("coin", INIT_COINS),
                              user_db.get("number_create_image", 0),
-                             user_db.get("proxy", 0),
                              user_db.get("number_create_video", 0),
-                             user_db.get("package", "free")),
-                reply_markup=kb_main(user_db.get("coin", INIT_COINS), user_db.get("package","free")),
+                             user_db.get("package", "free"),
+                             user_db.get("roll_call", False)),
+                reply_markup=kb_main(user_db.get("coin", INIT_COINS), user_db.get("package","free"), user_db.get("roll_call", False)),
                 parse_mode="MarkdownV2"
             )
         else:
@@ -674,7 +726,6 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.answer("⚠️ Bạn cần join channel để dùng bot!", show_alert=True)
         return
 
-    # ── Lấy user DB ──
     user_db = get_or_create_user(str(u.id), u.username or "")
     sess    = get_session(u.id)
     coins   = user_db.get("coin", INIT_COINS)
@@ -682,8 +733,8 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── PAYMENT callbacks ──
     if d in ("pay_menu","pay_coin_menu","pay_vip_menu") or \
-       d.startswith("pay_buy_") or d.startswith("pay_confirm_"):
-        await handle_payment_callback(d, q, u, user_db)
+       d.startswith("pay_buy_") or d.startswith("pay_sendphoto_"):
+        await handle_payment_callback(d, q, u, user_db, sessions_db)
         return
 
     # ── Home ──
@@ -694,10 +745,10 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             splash_final(u.first_name or "bạn", coins,
                          user_db.get("number_create_image",0),
-                         user_db.get("proxy",0),
                          user_db.get("number_create_video",0),
-                         user_db.get("package","free")),
-            reply_markup=kb_main(coins, user_db.get("package","free")),
+                         user_db.get("package","free"),
+                         user_db.get("roll_call", False)),
+            reply_markup=kb_main(coins, user_db.get("package","free"), user_db.get("roll_call", False)),
             parse_mode="MarkdownV2"
         ); return
 
@@ -706,7 +757,6 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             msg_balance(u.full_name or "", u.id, coins,
                         user_db.get("number_create_image",0),
-                        user_db.get("proxy",0),
                         user_db.get("number_create_video",0),
                         package),
             reply_markup=kb_back(), parse_mode="MarkdownV2"
@@ -717,7 +767,6 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             msg_stats(u.id, coins,
                       user_db.get("number_create_image",0),
-                      user_db.get("proxy",0),
                       user_db.get("number_create_video",0),
                       package),
             reply_markup=kb_back(), parse_mode="MarkdownV2"
@@ -727,26 +776,26 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if d == "help":
         await q.edit_message_text(msg_help(), reply_markup=kb_back(), parse_mode="MarkdownV2"); return
 
-    # ── Bypass ──
-    if d == "bypass":
-        k    = new_key(u.id)
-        link = f"{WEB_BASE_URL}/result/{k}"
-        sess["pending_key"] = k
-        await q.edit_message_text(
-            msg_bypass(link),
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🌐  Bấm Vào Đây Để Lấy Key  🔑", url=link)],
-                [InlineKeyboardButton("⌨️  Nhập Key Vào Đây", callback_data="key_enter")],
-                [InlineKeyboardButton("◀️  Quay Lại",          callback_data="home")],
-            ]), parse_mode="MarkdownV2"
-        ); return
-
-    if d == "key_enter":
-        sess["state"] = "key"
-        await q.edit_message_text(
-            "🔑 *NHẬP KEY*\n\n💬 Dán key từ trang web vào chat này:",
-            reply_markup=kb_cancel(), parse_mode="MarkdownV2"
-        ); return
+    # ── Roll Call (Điểm danh) ──
+    if d == "rollcall":
+        success, new_coin = do_rollcall(str(u.id))
+        if success:
+            await q.edit_message_text(
+                f"```\n{BANNER_SUCCESS}\n```\n\n"
+                f"📅 *ĐIỂM DANH THÀNH CÔNG\\!*\n\n"
+                f"```\n  🎁 Nhận được:  +{ROLLCALL_REWARD} xu\n  💰 Số dư mới:  {new_coin} xu\n```\n\n"
+                f"✅ Quay lại lúc 00:00 ngày mai để điểm danh tiếp\\!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎨 Tạo Ảnh Ngay!", callback_data="img_start"),
+                     InlineKeyboardButton("🎬 Tạo Video!",    callback_data="vid_start")],
+                    [InlineKeyboardButton("🏠 Menu",          callback_data="home")],
+                    [InlineKeyboardButton(f"💰 Số dư: {new_coin} xu", callback_data="balance")],
+                ]),
+                parse_mode="MarkdownV2"
+            )
+        else:
+            await q.answer("✅ Bạn đã điểm danh hôm nay rồi! Quay lại ngày mai nhé.", show_alert=True)
+        return
 
     # ── Start Image ──
     if d == "img_start":
@@ -754,11 +803,11 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(
                 f"⚠️ *KHÔNG ĐỦ XU\\!*\n\n"
                 f"```\n  Cần:    {COST_IMAGE} xu\n  Có:     {coins} xu\n  Thiếu:  {COST_IMAGE-coins} xu\n```\n\n"
-                f"💳 Mua xu ngay hoặc kiếm xu miễn phí\\!",
+                f"💳 Mua xu ngay hoặc điểm danh nhận xu miễn phí\\!",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💳  Mua Xu →",          callback_data="pay_menu")],
-                    [InlineKeyboardButton("🔗  Kiếm Xu Miễn Phí →", callback_data="bypass")],
-                    [InlineKeyboardButton("◀️  Quay Về Menu",        callback_data="home")],
+                    [InlineKeyboardButton("💳  Mua Xu →",              callback_data="pay_menu")],
+                    [InlineKeyboardButton("📅  Điểm Danh \\(\\+100xu\\)", callback_data="rollcall")],
+                    [InlineKeyboardButton("◀️  Quay Về Menu",            callback_data="home")],
                 ]), parse_mode="MarkdownV2"
             ); return
         sess["state"] = "wait_photo"
@@ -778,7 +827,7 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"```\n  Cần:    {COST_VIDEO} xu\n  Có:     {coins} xu\n```\n\n💳 Mua xu để tạo video\\!",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("💳  Mua Xu →",          callback_data="pay_menu")],
-                    [InlineKeyboardButton("🔗  Kiếm Xu Miễn Phí →", callback_data="bypass")],
+                    [InlineKeyboardButton("📅  Điểm Danh",         callback_data="rollcall")],
                     [InlineKeyboardButton("◀️  Quay Về Menu",        callback_data="home")],
                 ]), parse_mode="MarkdownV2"
             ); return
@@ -835,6 +884,22 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     state = sess.get("state")
     photo = update.message.photo[-1]
 
+    # ── Ảnh chuyển khoản thanh toán ──
+    if state == "wait_payment_photo":
+        success, label = await handle_payment_photo(photo.file_id, u, sessions_db)
+        if success:
+            await update.message.reply_text(
+                msg_pending_confirm(label),
+                reply_markup=kb_after_pay_confirm(),
+                parse_mode="MarkdownV2"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Có lỗi xảy ra\\. Vui lòng thử lại hoặc liên hệ admin\\.",
+                parse_mode="MarkdownV2"
+            )
+        return
+
     if state == "wait_photo":
         sess["photo_id"]   = photo.file_id
         sess["photo_name"] = f"photo_{photo.file_id[:8]}.jpg"
@@ -873,38 +938,6 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     coins   = user_db.get("coin", INIT_COINS)
     package = user_db.get("package","free")
 
-    # ── Key bypass ──
-    if state == "key":
-        status = validate_key(text)
-        if status == "valid":
-            use_key(text)
-            nb = db_add_coins(str(u.id), BYPASS_REWARD)
-            inc_proxy(str(u.id))
-            await update.message.reply_text(
-                f"```\n{BANNER_SUCCESS}\n```\n\n"
-                f"🎉 *NHẬN XU THÀNH CÔNG\\!*\n\n"
-                f"```\n  ✅ Key hợp lệ\n  💎 Nhận được:  +{BYPASS_REWARD} xu\n  💰 Số dư mới:  {nb} xu\n```",
-                reply_markup=kb_after_key(nb), parse_mode="MarkdownV2"
-            )
-        elif status == "used":
-            await update.message.reply_text(
-                f"```\n{BANNER_ERROR}\n```\n\n⚠️ *KEY ĐÃ ĐƯỢC SỬ DỤNG\\!*",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔗 Lấy Key Mới", callback_data="bypass")],
-                    [InlineKeyboardButton("🏠 Menu",        callback_data="home")],
-                ]), parse_mode="MarkdownV2"
-            )
-        else:
-            await update.message.reply_text(
-                f"```\n{BANNER_ERROR}\n```\n\n❌ *KEY KHÔNG HỢP LỆ\\!*",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔑 Nhập Lại",    callback_data="key_enter")],
-                    [InlineKeyboardButton("🔗 Lấy Key Mới", callback_data="bypass")],
-                    [InlineKeyboardButton("🏠 Menu",        callback_data="home")],
-                ]), parse_mode="MarkdownV2"
-            )
-        clear_session(u.id); return
-
     # ── Prompt tạo ảnh ──
     if state == "wait_prompt":
         photo_id   = sess.get("photo_id")
@@ -919,9 +952,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"⚠️ *KHÔNG ĐỦ XU\\!*\nCần `{COST_IMAGE}` xu \\| Có `{new_bal}` xu",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💳 Mua Xu",   callback_data="pay_menu")],
-                    [InlineKeyboardButton("🔗 Kiếm Xu",  callback_data="bypass")],
-                    [InlineKeyboardButton("🏠 Menu",     callback_data="home")],
+                    [InlineKeyboardButton("💳 Mua Xu",        callback_data="pay_menu")],
+                    [InlineKeyboardButton("📅 Điểm Danh",     callback_data="rollcall")],
+                    [InlineKeyboardButton("🏠 Menu",          callback_data="home")],
                 ]), parse_mode="MarkdownV2"
             )
             clear_session(u.id); return
@@ -951,12 +984,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 except _queue.Empty: pass
                 await asyncio.sleep(1.5)
 
-        # ── Hàng chờ (free user) ──
         if package == "free":
             queue_msg = await update.message.reply_text("⏳ Đang kiểm tra hàng chờ\\.\\.\\.", parse_mode="MarkdownV2")
-            wait_pos  = [0]
             async def queue_status_cb(status_text, pos):
-                wait_pos[0] = pos
                 try: await queue_msg.edit_text(status_text, parse_mode="MarkdownV2")
                 except: pass
             entered = await enter_queue(str(u.id), package, queue_status_cb)
@@ -1026,9 +1056,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"⚠️ *KHÔNG ĐỦ XU\\!*\nCần `{COST_VIDEO}` xu \\| Có `{new_bal}` xu",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💳 Mua Xu",  callback_data="pay_menu")],
-                    [InlineKeyboardButton("🔗 Kiếm Xu", callback_data="bypass")],
-                    [InlineKeyboardButton("🏠 Menu",    callback_data="home")],
+                    [InlineKeyboardButton("💳 Mua Xu",    callback_data="pay_menu")],
+                    [InlineKeyboardButton("📅 Điểm Danh", callback_data="rollcall")],
+                    [InlineKeyboardButton("🏠 Menu",      callback_data="home")],
                 ]), parse_mode="MarkdownV2"
             )
             clear_session(u.id); return
@@ -1059,7 +1089,6 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 except _queue.Empty: pass
                 await asyncio.sleep(3)
 
-        # ── Hàng chờ ──
         if package == "free":
             queue_msg = await update.message.reply_text("⏳ Đang kiểm tra hàng chờ\\.\\.\\.", parse_mode="MarkdownV2")
             async def queue_status_cb_v(status_text, pos):
@@ -1125,7 +1154,10 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════
 def setup_application(bot_token: str) -> Application:
     application = Application.builder().token(bot_token).build()
-    application.add_handler(CommandHandler("start", cmd_start))
+    application.add_handler(CommandHandler("start",      cmd_start))
+    application.add_handler(CommandHandler("addcoins",   cmd_addcoins))
+    application.add_handler(CommandHandler("setpackage", cmd_setpackage))
+    application.add_handler(CommandHandler("userinfo",   cmd_userinfo))
     application.add_handler(CallbackQueryHandler(btn))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
