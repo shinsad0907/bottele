@@ -219,10 +219,10 @@ def msg_pending_confirm(label: str) -> str:
 
 def notify_admin_payment(username: str, user_id: int,
                           pkg: dict, pkg_id: str,
-                          photo_file_id: str | None = None):
+                          photo_bytes: bytes | None = None):
     """
     Gửi thông báo thanh toán tới ADMIN_CHAT_ID qua ADMIN_BOT_TOKEN.
-    Dùng requests thuần (synchronous) để tránh conflict event loop.
+    Dùng requests thuần (sync) upload photo bytes thực tế.
     """
     import requests as _req
     import datetime as _dt
@@ -236,17 +236,19 @@ def notify_admin_payment(username: str, user_id: int,
             f"💵 Số tiền: {pkg['vnd']:,}đ\n"
             f"📝 Loại: {pkg_type}\n"
             f"🕐 {vn_now.strftime('%H:%M %d/%m/%Y')}\n\n"
-            f"⚡ Lệnh duyệt (gõ vào @clothesbot):\n"
+            f"⚡ Lệnh duyệt (gõ vào bot chính @clothesbot):\n"
             f"/addcoins @{username} <số xu>\n"
             f"/setpackage @{username} vip\n"
             f"/setpackage @{username} vip_pro"
         )
         base = f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}"
-        if photo_file_id:
+        if photo_bytes:
+            # Upload bytes thực tế - tránh lỗi file_id cross-bot
             resp = _req.post(
                 f"{base}/sendPhoto",
-                data={"chat_id": ADMIN_CHAT_ID, "photo": photo_file_id, "caption": caption},
-                timeout=15,
+                data={"chat_id": ADMIN_CHAT_ID, "caption": caption},
+                files={"photo": ("ck.jpg", photo_bytes, "image/jpeg")},
+                timeout=30,
             )
         else:
             resp = _req.post(
@@ -378,10 +380,10 @@ async def handle_payment_callback(d: str, q, u, user_db: dict, sessions_db: dict
         return
 
 
-async def handle_payment_photo(photo_file_id: str, u, sessions_db: dict):
+async def handle_payment_photo(photo_file_id: str, u, sessions_db: dict, bot=None):
     """
     Gọi khi user gửi ảnh trong trạng thái 'wait_payment_photo'.
-    Ghi DB + thông báo admin kèm ảnh.
+    Ghi DB + thông báo admin kèm ảnh bytes (download qua bot chính).
     Trả về (success: bool, label: str)
     """
     from script.database import record_payment
@@ -400,7 +402,8 @@ async def handle_payment_photo(photo_file_id: str, u, sessions_db: dict):
 
     username = u.username or str(u.id)
 
-    # Ghi vào DB
+    # Ghi vào DB (KHÔNG ghi lên DB - admin duyệt thủ công mới ghi)
+    # record_payment chỉ ghi log pending, KHÔNG cộng xu/gói tự động
     record_payment(
         user_id    = uid,
         username   = username,
@@ -408,13 +411,23 @@ async def handle_payment_photo(photo_file_id: str, u, sessions_db: dict):
         amount_vnd = pkg["vnd"],
     )
 
-    # Thông báo admin kèm ảnh CK (sync, dùng requests)
+    # Download ảnh qua bot chính → gửi bytes sang bot payment
+    photo_bytes = None
+    if bot:
+        try:
+            tg_file = await bot.get_file(photo_file_id)
+            ba = await tg_file.download_as_bytearray()
+            photo_bytes = bytes(ba)
+        except Exception as e:
+            log.error(f"Download photo error: {e}")
+
+    # Thông báo admin kèm ảnh CK (sync, dùng requests với bytes)
     notify_admin_payment(
-        username      = username,
-        user_id       = u.id,
-        pkg           = pkg,
-        pkg_id        = pkg_id,
-        photo_file_id = photo_file_id,
+        username    = username,
+        user_id     = u.id,
+        pkg         = pkg,
+        pkg_id      = pkg_id,
+        photo_bytes = photo_bytes,
     )
 
     # Reset state

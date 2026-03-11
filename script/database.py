@@ -222,16 +222,22 @@ def set_package(user_id: str, username: str, package: str):
 def record_payment(user_id: str, username: str, pkg_id: str, amount_vnd: int):
     """
     Bảng payment : id, username, pay_package, pay_coin
-    Bảng package : id, username, package, purchase_date
+      - Mua xu  : pay_package = None, pay_coin = amount_vnd (tiền VND)
+      - Mua VIP : pay_package = pkg_id, pay_coin = 0
+    Admin duyệt thủ công rồi mới /addcoins hoặc /setpackage.
     """
     is_coin     = pkg_id.startswith("coin")
     clean_uname = username.lstrip("@") if username else username
 
-    _insert("payment", {
-        "username":    clean_uname,
-        "pay_package": "" if is_coin else pkg_id,
-        "pay_coin":    amount_vnd if is_coin else 0,
-    })
+    row = {"username": clean_uname}
+    if is_coin:
+        row["pay_package"] = None
+        row["pay_coin"]    = amount_vnd
+    else:
+        row["pay_package"] = pkg_id
+        row["pay_coin"]    = 0
+
+    _insert("payment", row)
 
     if not is_coin:
         _insert("package", {

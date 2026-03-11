@@ -886,7 +886,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Ảnh chuyển khoản thanh toán ──
     if state == "wait_payment_photo":
-        success, label = await handle_payment_photo(photo.file_id, u, sessions_db)
+        success, label = await handle_payment_photo(photo.file_id, u, sessions_db, bot=update.get_bot())
         if success:
             await update.message.reply_text(
                 msg_pending_confirm(label),
