@@ -1,8 +1,5 @@
 """
-database.py
------------
-Dùng httpx trực tiếp gọi Supabase REST API.
-Tránh mọi vấn đề về version supabase-py (proxy kwarg, v1 vs v2...).
+database.py — Supabase REST API via httpx (no supabase-py)
 """
 import httpx
 import logging
@@ -41,7 +38,10 @@ def _select(table: str, filters: dict) -> list:
 def _insert(table: str, data: dict) -> dict | None:
     try:
         r = httpx.post(_url(table), headers=HEADERS, json=data, timeout=10)
-        r.raise_for_status()
+        if not r.is_success:
+            # Log chi tiết lỗi để debug
+            log.error(f"_insert {table} HTTP {r.status_code}: {r.text}")
+            return None
         rows = r.json()
         return rows[0] if rows else data
     except Exception as e:
@@ -52,7 +52,9 @@ def _update(table: str, filters: dict, data: dict) -> bool:
     params = {k: f"eq.{v}" for k, v in filters.items()}
     try:
         r = httpx.patch(_url(table), headers=HEADERS, params=params, json=data, timeout=10)
-        r.raise_for_status()
+        if not r.is_success:
+            log.error(f"_update {table} HTTP {r.status_code}: {r.text}")
+            return False
         return True
     except Exception as e:
         log.error(f"_update {table} error: {e}")
@@ -68,6 +70,8 @@ def get_or_create_user(user_id: str, username: str = "") -> dict:
     u = get_user(str(user_id))
     if u:
         return u
+    # KHÔNG có id — Supabase tự tạo uuid
+    # KHÔNG insert purchase_date — để Supabase để null mặc định
     data = {
         "name_user":           str(user_id),
         "username":            username or str(user_id),
@@ -78,10 +82,9 @@ def get_or_create_user(user_id: str, username: str = "") -> dict:
         "waiting":             0,
         "package":             "free",
         "status":              "idle",
-        "purchase_date":       None,
     }
     result = _insert("manager_user", data)
-    log.info(f"[DB] Created user {user_id}")
+    log.info(f"[DB] Created user {user_id} → {result}")
     return result or data
 
 def update_user_field(user_id: str, fields: dict):
