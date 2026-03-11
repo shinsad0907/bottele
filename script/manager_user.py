@@ -1,6 +1,17 @@
 import requests
 import supabase
 
+class payment_clothesAI:
+    def __init__(self):
+        self.API_bot = "8712430335:AAGBsFNLflx7BXZpjgQ_fMesAqF76gAgUCk"
+    def send_message(self, chat_id, text):
+        url = f"https://api.telegram.org/bot{self.API_bot}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": text
+        }
+        response = requests.post(url, json=payload)
+        return response.json()
 class ManagerUser:
     def __init__(self):
         self.API_Keys = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqeXdmZHZjd3loaXh1d2ZmZWNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNDQ4MzgsImV4cCI6MjA4ODYyMDgzOH0.15mtEfJAMZPY8LT9od92g73YuJNCFPhUYzoDri0HK-s"
