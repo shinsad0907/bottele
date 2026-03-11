@@ -217,45 +217,47 @@ def msg_pending_confirm(label: str) -> str:
 #  ADMIN NOTIFICATION
 # ══════════════════════════════════════════════
 
-async def notify_admin_payment(username: str, user_id: int,
-                                pkg: dict, pkg_id: str,
-                                photo_file_id: str | None = None):
-    """Gửi thông báo thanh toán tới ADMIN_CHAT_ID qua ADMIN_BOT_TOKEN.
-    Nếu có photo_file_id thì gửi kèm ảnh CK."""
+def notify_admin_payment(username: str, user_id: int,
+                          pkg: dict, pkg_id: str,
+                          photo_file_id: str | None = None):
+    """
+    Gửi thông báo thanh toán tới ADMIN_CHAT_ID qua ADMIN_BOT_TOKEN.
+    Dùng requests thuần (synchronous) để tránh conflict event loop.
+    """
+    import requests as _req
+    import datetime as _dt
     try:
-        import datetime as _dt
-        vn_now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=7)))
+        vn_now   = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=7)))
         pkg_type = "mua xu" if pkg_id.startswith("coin") else "VIP package"
-
         caption = (
-            f"💳 *YÊU CẦU THANH TOÁN MỚI*\n\n"
-            f"👤 @{esc(username)} \\(`{user_id}`\\)\n"
-            f"📦 Gói: `{esc(pkg['label'])}`\n"
-            f"💵 Số tiền: `{pkg['vnd']:,}đ`\n"
-            f"📝 Loại: *{pkg_type}*\n"
-            f"🕐 `{vn_now.strftime('%H:%M %d/%m/%Y')}`\n\n"
-            f"⚡ Dùng lệnh để duyệt:\n"
-            f"`/addcoins @{username} <số xu>`\n"
-            f"`/setpackage @{username} vip`\n"
-            f"`/setpackage @{username} vip_pro`"
+            f"💳 YÊU CẦU THANH TOÁN MỚI\n\n"
+            f"👤 @{username} (ID: {user_id})\n"
+            f"📦 Gói: {pkg['label']}\n"
+            f"💵 Số tiền: {pkg['vnd']:,}đ\n"
+            f"📝 Loại: {pkg_type}\n"
+            f"🕐 {vn_now.strftime('%H:%M %d/%m/%Y')}\n\n"
+            f"⚡ Lệnh duyệt (gõ vào @clothesbot):\n"
+            f"/addcoins @{username} <số xu>\n"
+            f"/setpackage @{username} vip\n"
+            f"/setpackage @{username} vip_pro"
         )
-
-        admin_bot = TGBot(token=ADMIN_BOT_TOKEN)
-        async with admin_bot:
-            if photo_file_id:
-                await admin_bot.send_photo(
-                    chat_id    = ADMIN_CHAT_ID,
-                    photo      = photo_file_id,
-                    caption    = caption,
-                    parse_mode = "MarkdownV2",
-                )
-            else:
-                await admin_bot.send_message(
-                    chat_id    = ADMIN_CHAT_ID,
-                    text       = caption,
-                    parse_mode = "MarkdownV2",
-                )
-        log.info(f"[PayNotify] Sent to admin for @{username}")
+        base = f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}"
+        if photo_file_id:
+            resp = _req.post(
+                f"{base}/sendPhoto",
+                data={"chat_id": ADMIN_CHAT_ID, "photo": photo_file_id, "caption": caption},
+                timeout=15,
+            )
+        else:
+            resp = _req.post(
+                f"{base}/sendMessage",
+                data={"chat_id": ADMIN_CHAT_ID, "text": caption},
+                timeout=15,
+            )
+        if resp.ok:
+            log.info(f"[PayNotify] Sent to admin for @{username}")
+        else:
+            log.error(f"[PayNotify] Telegram error: {resp.text}")
     except Exception as e:
         log.error(f"notify_admin_payment error: {e}")
 
@@ -406,8 +408,8 @@ async def handle_payment_photo(photo_file_id: str, u, sessions_db: dict):
         amount_vnd = pkg["vnd"],
     )
 
-    # Thông báo admin kèm ảnh CK
-    await notify_admin_payment(
+    # Thông báo admin kèm ảnh CK (sync, dùng requests)
+    notify_admin_payment(
         username      = username,
         user_id       = u.id,
         pkg           = pkg,
