@@ -94,12 +94,12 @@ def getkey():
     if not res.data:
         return "Key not found", 404
 
-    full_url = res.data[0].get("url_shorten_key",link=full_url, ip=request.remote_addr)
+    full_url = res.data[0].get("url_shorten_key")
 
     if not full_url:
         return "Shortened link not found", 404
 
-    return render_template("getkey.html", link=full_url)
+    return render_template("getkey.html", full_url=full_url, ip=request.remote_addr)  # ← truyền đúng tên biến
 
 @app.route("/result_key")
 def result_key():
