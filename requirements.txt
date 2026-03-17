@@ -2,3 +2,4 @@ python-telegram-bot==21.3
 requests
 httpx
 Flask
+supabase
