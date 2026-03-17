@@ -82,7 +82,7 @@ def webhook_info():
 @app.route("/getkey")
 def getkey():
 
-    id_key = request.args.get("id_key")
+    id_key = request.args.get("user_id")
     if not id_key:
         return "Missing id_key parameter", 400
 
