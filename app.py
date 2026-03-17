@@ -83,8 +83,8 @@ def webhook_info():
 def getkey():
 
     id_key = request.args.get("id_key")
-    # if not id_key:
-    #     return "Missing id_key parameter", 400
+    if not id_key:
+        return "Missing id_key parameter", 400
 
     res = supabase.table("external_link")\
         .select("*")\
@@ -104,8 +104,8 @@ def getkey():
 @app.route("/result_key")
 def result_key():
     key = request.args.get("key")
-    # if not key:
-    #     return "Missing key parameter", 400
+    if not key:
+        return "Missing key parameter", 400
 
     return render_template("result.html", link=key)
 

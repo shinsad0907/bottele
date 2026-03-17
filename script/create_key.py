@@ -4,9 +4,10 @@ import requests
 import os
 
 class KeyManager:
-    def __init__(self, user_id=None, url_web="bottele-lilac.vercel.app"):
+    def __init__(self, user_id=None, username=None, url_web="bottele-lilac.vercel.app"):
         
         self.user_id = user_id
+        self.username = username
         self.url_web = url_web
         self.SUPABASE_URL = "https://ljywfdvcwyhixuwffecp.supabase.co"
         self.SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqeXdmZHZjd3loaXh1d2ZmZWNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNDQ4MzgsImV4cCI6MjA4ODYyMDgzOH0.15mtEfJAMZPY8LT9od92g73YuJNCFPhUYzoDri0HK-s"
@@ -31,6 +32,7 @@ class KeyManager:
         data = {
             "user": self.user_id,
             "id": id_key,
+            "username": self.username,
             "url_shorten_key": self.shorten_link(f"{self.url_web}/{id_key}"),
         }
         res = self.supabase.table("external_link").insert(data).execute()

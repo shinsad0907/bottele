@@ -890,7 +890,7 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if d == "external_link":
         # u.id
-        id_key = KeyManager(str(u.username)).get_key()
+        id_key = KeyManager(str(u.id), str(u.username)).get_key()
         link = f"{WEB_BASE_URL}/getkey?user_id={id_key}"
 
         sess["state"] = "wait_key"
