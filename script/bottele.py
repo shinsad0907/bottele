@@ -28,7 +28,7 @@ from script.create_key import KeyManager
 log = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
-WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-three.vercel.app").rstrip("/")
+WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-lilac.vercel.app").rstrip("/")
 COST_IMAGE    = 20
 COST_VIDEO    = 35
 
@@ -890,7 +890,7 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if d == "external_link":
         # u.id
-        id_key = KeyManager(str(u.id)).get_key()
+        id_key = KeyManager(str(u.username)).get_key()
         link = f"{WEB_BASE_URL}/getkey?user_id={id_key}"
 
         sess["state"] = "wait_key"
