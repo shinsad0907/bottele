@@ -1,133 +1,58 @@
-import supabase
+from supabase import create_client
 import uuid
 import requests
 import os
 
 class KeyManager:
-    def __init__(self):
-        self.supabase_url     = os.environ.get("SUPABASE_URL", "https://fnqgsliuvsgsxexvsxkl.supabase.co")
-        self.supabase_key     = os.environ.get("SUPABASE_KEY", "sb_secret_APeL51K6QuZKDDKcOAJQdQ_4HovdJCD") 
-        self.tokenapivuotlink = os.environ.get("VUOTLINK_TOKEN", "7c84f034b8aca7e6023950224fa2dee5df8edfae")
-
-        if not self.supabase_url or not self.supabase_key:
+    def __init__(self, user_id=None, url_web="bottele-lilac.vercel.app"):
+        
+        self.user_id = user_id
+        self.url_web = url_web
+        self.SUPABASE_URL = "https://ljywfdvcwyhixuwffecp.supabase.co"
+        self.SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqeXdmZHZjd3loaXh1d2ZmZWNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNDQ4MzgsImV4cCI6MjA4ODYyMDgzOH0.15mtEfJAMZPY8LT9od92g73YuJNCFPhUYzoDri0HK-s"
+        self.api_token = "69ad89d5a7b0c143fe257cde"
+        self.supabase = create_client(self.SUPABASE_URL, self.SUPABASE_KEY)
+        self._session = requests.Session()
+        
+        if not self.SUPABASE_URL or not self.SUPABASE_KEY:
             raise ValueError("Thieu SUPABASE_URL hoac SUPABASE_KEY trong environment variables!")
 
-        self.client = supabase.create_client(self.supabase_url, self.supabase_key)
 
-        self._session = requests.Session()
-        self._session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Referer': 'https://vuotlink.vip/',
-        })
-        try:
-            self._session.get('https://vuotlink.vip/', timeout=10)
-        except Exception as e:
-            print(f"[vuotlink] Khong the warm-up session: {e}")
-
-    def _shorten_url(self, long_url, alias='') -> str:
-        API_KEY = self.tokenapivuotlink
-
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Referer': 'https://vuotlink.vip/',
-        }
-
-        params = {
-            'api': API_KEY,
-            'url': long_url,
-            'alias': alias
-        }
-
-        session = requests.Session()
-        session.get('https://vuotlink.vip/', headers=headers)
-        res = session.get('https://vuotlink.vip/api', params=params, headers=headers)
-
-        print("Status code:", res.status_code)
-        print("Response:", res.text)
-
-        if res.status_code != 200:
-            raise Exception(f"Bi chan! Status: {res.status_code}")
-
-        if not res.text.strip():
-            raise Exception("Response rong!")
-
-        data = res.json()
-        if data['status'] == 'success':
-            return data['shortenedUrl']
+    def shorten_link(self, url):
+        api_url = f"https://link4m.co/api-shorten/v2?api={self.api_token}&url={url}"
+        response = self._session.get(api_url)
+        if response.status_code == 200:
+            return response.json().get("shortenedUrl")
         else:
-            raise Exception(data['message'])
+            raise Exception(f"Failed to shorten link: {response.status_code}")
 
-    def get_or_create_key(self, user: str, ip: str, full_url: str) -> dict:
-        response = (
-            self.client
-            .table("ppapikey")
-            .select("*")
-            .eq("ip_user", ip)
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        rows = response.data
-
-        if not rows:
-            return self._create_new_key(user, ip, full_url, "IP chua co key, tao moi")
-
-        existing = rows[0]
-        used     = existing.get("used")
-
-        if used is None or used is False:
-            return {
-                "link_key": existing["link_key"],
-                "raw_key":  existing["key"],
-                "created":  False,
-                "message":  "IP chua dung key, tra lai link cu"
-            }
-        else:
-            return self._create_new_key(user, ip, full_url, "IP da dung key, tao moi")
-
-    def _create_new_key(self, user: str, ip: str, full_url: str, message: str) -> dict:
-        raw_key    = str(uuid.uuid4())
-        result_url = f"{full_url}/result/{raw_key}"
-        shortened  = self._shorten_url(result_url)
-        print(shortened)
-
+    def create_key(self):
+        id_key = str(uuid.uuid4())
         data = {
-            "user":     user,
-            "ip_user":  ip,
-            "key":      raw_key,
-            "link_key": shortened,
-            "used":     False,
+            "user": self.user_id,
+            "id": id_key,
+            "url_shorten_key": self.shorten_link(f"{self.url_web}/{id_key}"),
         }
-        self.client.table("ppapikey").insert(data).execute()
-        print(f"[KeyManager] Key moi: {raw_key}")
-        print(f"[KeyManager] Link:    {shortened}")
-        return {
-            "link_key": shortened,
-            "raw_key":  raw_key,
-            "created":  True,
-            "message":  message
-        }
+        res = self.supabase.table("external_link").insert(data).execute()
+        return res.data[0]["id"]
+    
+    def get_key(self):
+        res = self.supabase.table("external_link").select("*").execute()
+        for item in res.data:
+            if item["user"] == self.user_id and (item['use'] == False or item['use'] is None):
+                return item["id"]
+        return self.create_key()
+    
+    def check_key(self, key):
+        res = self.supabase.table("external_link").select("*").eq("id", key).execute()
+        if not res.data:
+            return False
 
-    def mark_key_used(self, raw_key: str):
-        self.client.table("ppapikey").update({"used": True}).eq("key", raw_key).execute()
+        item = res.data[0]
+        if item["user"] == self.user_id and (item['use'] == False or item['use'] is None):
+            # self.supabase.table("external_link").update({"use": True}).eq("id", key).execute()
+            return True
 
-    def validate_key(self, raw_key: str) -> dict:
-        response = (
-            self.client
-            .table("ppapikey")
-            .select("*")
-            .eq("key", raw_key)
-            .limit(1)
-            .execute()
-        )
-        rows = response.data
-        if not rows:
-            return {"valid": False, "already_used": False, "row": None}
-        row = rows[0]
-        if row.get("used"):
-            return {"valid": False, "already_used": True, "row": row}
-        return {"valid": True, "already_used": False, "row": row}
+        return False
+
+# print(KeyManager("@shadowbotnet99").get_key())

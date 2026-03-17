@@ -22,6 +22,8 @@ from script.payment_handler import (
     msg_pending_confirm, kb_after_pay_confirm,
     COIN_MAP, VIP_MAP,
 )
+from script.create_key import KeyManager
+
 
 log = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
@@ -268,6 +270,7 @@ def kb_main(coins, package="free", roll_called=False):
         [InlineKeyboardButton("💎 Ví Xu",                   callback_data="balance"),
          InlineKeyboardButton(rc_label,                     callback_data="rollcall")],
         [InlineKeyboardButton("💳 Mua Xu / VIP",            callback_data="pay_menu")],
+        [InlineKeyboardButton("🔗 Vượt link lấy xu?",             callback_data="external_link")],
         [InlineKeyboardButton("📊 Thống Kê",                callback_data="stats"),
          InlineKeyboardButton("📖 Hướng Dẫn",               callback_data="help")],
         [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
@@ -885,7 +888,28 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb_cancel(), parse_mode="MarkdownV2"
         ); return
 
+    if d == "external_link":
+        # u.id
+        id_key = KeyManager(str(u.id)).get_key()
+        link = f"{WEB_BASE_URL}/getkey?user_id={id_key}"
 
+        sess["state"] = "wait_key"
+
+        await q.edit_message_text(
+            "🔑 *NHẬN XU BẰNG KEY*\n\n"
+            "```\n"
+            "  Bước 1: Vượt link bên dưới\n"
+            "  Bước 2: Lấy KEY\n"
+            "  Bước 3: Dán KEY vào bot \n"
+            "```\n\n"
+            "🎁 Phần thưởng: `+20 xu`",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 Lấy KEY", url=link)],
+                [InlineKeyboardButton("❌ Huỷ", callback_data="home")]
+            ]),
+            parse_mode="MarkdownV2"
+        )
+        return
 # ══════════════════════════════════════════════
 #  PHOTO HANDLER
 # ══════════════════════════════════════════════
@@ -935,6 +959,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "💡 `gentle swaying motion`\n`hair blowing in the wind`\n`slow zoom in, cinematic`",
             reply_markup=kb_cancel(), parse_mode="MarkdownV2"
         ); return
+
 
 
 # ══════════════════════════════════════════════
@@ -1157,6 +1182,21 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         await msg.delete()
         return
+
+
+    if state == "wait_key":
+        check_key = KeyManager(str(u.id)).check_key(text.strip())
+        if not check_key:
+            await update.message.reply_text(
+                "❌ KEY không hợp lệ hoặc đã được sử dụng\\. Vui lòng kiểm tra lại\\!",
+                parse_mode="MarkdownV2"
+            )
+            return
+        db_add_coins(str(u.id), 300)
+        await update.message.reply_text(
+            "✅ KEY hợp lệ! Bạn đã được cộng 300 xu.",
+            parse_mode="MarkdownV2"
+        )
 
     # ── Default ──
     user_db = get_or_create_user(str(u.id), u.username or "")

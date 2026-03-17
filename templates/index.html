@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>ppapikey – Lấy Link Key</title>
+  <title>Vượt Link Lấy Key – Nhận Xu</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -18,18 +18,16 @@
       position: relative;
       overflow: hidden;
     }
-    /* Dot grids */
     .dots { position: absolute; display: grid; gap: 9px; pointer-events: none; }
     .dots span { width: 5px; height: 5px; border-radius: 50%; background: #c5c8e0; display: block; }
     .dots-tr { top: 56px; right: 56px; grid-template-columns: repeat(5, 1fr); }
     .dots-bl { bottom: 72px; left: 56px; grid-template-columns: repeat(5, 1fr); }
     .dots-br { bottom: 100px; right: 130px; grid-template-columns: repeat(4, 1fr); opacity: 0.5; }
 
-    /* Shadow cards behind */
     .wrap { position: relative; display: flex; align-items: center; justify-content: center; }
     .card-bg1 {
       position: absolute;
-      width: 340px; height: 370px;
+      width: 360px; height: 420px;
       background: #d9ddf0;
       border-radius: 20px;
       transform: rotate(-5deg) translate(28px, 28px);
@@ -37,14 +35,13 @@
     }
     .card-bg2 {
       position: absolute;
-      width: 340px; height: 370px;
+      width: 360px; height: 420px;
       background: #e6e8f5;
       border-radius: 20px;
       transform: rotate(-2deg) translate(13px, 13px);
       z-index: 1;
     }
 
-    /* Main card */
     .card {
       position: relative;
       z-index: 2;
@@ -52,7 +49,7 @@
       border-radius: 20px;
       padding: 40px 36px 36px;
       width: 100%;
-      max-width: 380px;
+      max-width: 400px;
       box-shadow: 0 8px 40px rgba(80,80,140,0.12);
       animation: fadeUp 0.45s ease both;
       text-align: center;
@@ -67,62 +64,149 @@
       font-size: 1.25rem; font-weight: 700; color: #5b5fc7; margin-bottom: 18px;
     }
     h1 { font-size: 1.45rem; font-weight: 700; color: #1a1a2e; margin-bottom: 6px; }
-    .subtitle { font-size: 0.875rem; color: #888aab; margin-bottom: 28px; }
+    .subtitle { font-size: 0.875rem; color: #888aab; margin-bottom: 24px; line-height: 1.6; }
 
-    .game-box {
+    .info-box {
       background: #f9f9fd; border: 1px solid #e8e8f5;
-      border-radius: 12px; padding: 16px 18px; text-align: left; margin-bottom: 24px;
+      border-radius: 12px; padding: 16px 18px; text-align: left; margin-bottom: 16px;
     }
-    .game-box-label {
+    .info-box-label {
       display: flex; align-items: center; gap: 7px;
       font-size: 0.8rem; color: #888aab; font-weight: 500; margin-bottom: 8px;
     }
-    .game-name { font-size: 0.95rem; font-weight: 700; color: #5b5fc7; letter-spacing: 0.02em; }
+    .info-value { font-size: 0.97rem; font-weight: 700; color: #5b5fc7; letter-spacing: 0.02em; }
+
+    .coin-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: linear-gradient(135deg, #fff8e1, #fff3cd);
+      border: 1px solid #ffe082;
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #e65100;
+      margin-bottom: 22px;
+    }
+
+    .step-list {
+      text-align: left;
+      margin-bottom: 24px;
+    }
+    .step {
+      display: flex; align-items: flex-start; gap: 10px;
+      margin-bottom: 10px;
+      font-size: 0.875rem; color: #444466; line-height: 1.5;
+    }
+    .step-num {
+      min-width: 22px; height: 22px;
+      background: #5b5fc7; color: #fff;
+      border-radius: 50%; font-size: 0.75rem; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      margin-top: 1px;
+    }
 
     .btn-main {
       display: inline-flex; align-items: center; justify-content: center; gap: 9px;
       background: #5b5fc7; color: #fff;
       font-family: 'Inter', sans-serif; font-size: 0.97rem; font-weight: 600;
       border: none; border-radius: 12px; padding: 15px 36px;
-      cursor: pointer; text-decoration: none;
+      cursor: pointer; text-decoration: none; width: 100%;
       transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
       box-shadow: 0 4px 18px rgba(91,95,199,0.32);
     }
     .btn-main:hover { background: #4a4eb5; transform: translateY(-2px); box-shadow: 0 8px 28px rgba(91,95,199,0.38); }
     .btn-main:active { transform: translateY(0); }
+
+    .bot-link {
+      margin-top: 14px;
+      font-size: 0.8rem;
+      color: #888aab;
+    }
+    .bot-link a {
+      color: #5b5fc7; font-weight: 600; text-decoration: none;
+    }
+    .bot-link a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <div class="dots dots-tr">{% for i in range(20) %}<span></span>{% endfor %}</div>
-  <div class="dots dots-bl">{% for i in range(20) %}<span></span>{% endfor %}</div>
-  <div class="dots dots-br">{% for i in range(12) %}<span></span>{% endfor %}</div>
+  <!-- Dot decorations -->
+  <div class="dots dots-tr">
+    <span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span>
+  </div>
+  <div class="dots dots-bl">
+    <span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span>
+  </div>
+  <div class="dots dots-br">
+    <span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span>
+  </div>
 
   <div class="wrap">
     <div class="card-bg1"></div>
     <div class="card-bg2"></div>
     <div class="card">
+
+      <!-- Logo -->
       <div class="logo">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-        ppapikey
+        Vượt Link Key
       </div>
-      <h1>Lấy Link Key</h1>
-      <p class="subtitle">Nhận link key của bạn một cách nhanh chóng</p>
-      <div class="game-box">
-        <div class="game-box-label">
+
+      <h1>Nhận Xu Miễn Phí 🪙</h1>
+      <p class="subtitle">Vượt link để lấy key &amp; nhận xu.<br/>Vui lòng vào Bot Telegram AI để lấy link vượt key.</p>
+
+      <!-- Coin badge -->
+      <div class="coin-badge">
+        🪙 Nhận xu ngay sau khi vượt link thành công
+      </div>
+
+      <!-- Bot info -->
+      <div class="info-box">
+        <div class="info-box-label">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5b5fc7" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
           </svg>
-          Thông tin BOT
+          Bot Telegram
         </div>
-        <div class="game-name">BOT TELE V1</div>
+        <div class="info-value">@clothessAI_bot</div>
       </div>
-      <a href="/getkey" class="btn-main">
+
+      <!-- Steps -->
+      <div class="step-list">
+        <div class="step">
+          <div class="step-num">1</div>
+          <span>Vào Bot Telegram <strong>@clothessAI_bot</strong> để lấy link vượt key</span>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <span>Nhấn nút bên dưới để bắt đầu vượt link</span>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <span>Hoàn thành các bước &amp; nhận xu vào tài khoản</span>
+        </div>
+      </div>
+
+      <!-- CTA button -->
+      <a href="https://t.me/clothessAI_bot" target="_blank" class="btn-main">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
           <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
         </svg>
-        Lấy Link Key
+        Vào Bot Lấy Link Vượt Key
       </a>
+
+      <div class="bot-link">
+        Hoặc tìm trực tiếp trên Telegram: <a href="https://t.me/clothessAI_bot" target="_blank">@clothessAI_bot</a>
+      </div>
+
     </div>
   </div>
 </body>
