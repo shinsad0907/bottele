@@ -200,7 +200,20 @@ SPLASH_F3 = """```
 ║   👗  H E S B O T  ·  STUDIO  👗   ║
 ╚══════════════════════════════════════╝
 ```"""
-
+PROMPT_PRESETS = [
+    ("Nude",   "completely nude,medium breasts. same framing as original image, do not crop, do not zoom, keep original composition, keep original body proportions"),
+    ("Micro Bikini",   "change clothes to micro bikini, extremely small bikini, minimal coverage, provocative. same framing as original image, do not crop, do not zoom, keep original composition, keep original body proportions"),
+    ("Bunny Suit",   "change clothes to bunny suit, playboy bunny, strapless, leotard, bow tie, cuffs, black fishnet stockings. same framing as original image, do not crop, do not zoom, keep original composition, keep original body proportions"),
+    ("Cumshot",   "The woman has some sparse semen on her face, mouth and body. This semen is freshly ejaculated and somewhat viscous. same framing as original image, do not crop, do not zoom, keep original composition, keep original body proportions"),
+    ("Cowgirl",   "The woman in the picture is in a riding position, sitting semi-sitting or slightly leaning forward, straddling the supine man. Her legs are open, and the man's penis is fully inserted into her vagina; the base of his penis and testicles are clearly visible, and the woman's vagina is visibly stretched open by the large penis. The woman's appearance and physical characteristics should not be altered."),
+    ("Fingering",   "legs spread open and her vagina exposed,ass visible through thighs, anus, squatting, hand placed on pubis, fingering pussy, showing huge clit exposed. full body shot, entire body visible, head to toe, same framing as original image, do not crop, do not zoom, keep original composition, keep original body proportions"),
+    ("Kitchen",   "The scene was changed to a kitchen. The woman in the picture is sitting on the kitchen floor with her legs spread open, facing the camera, revealing her clearly visible labia majora and labia minora, the vagina is clearly visible."),
+    ("Living room",   "The scene was changed to a living room. The woman in the picture is sitting on the sofa with her legs spread open, facing the camera, revealing her clearly visible labia majora and labia minora, the vagina is clearly visible."),
+    ("In car",   "The scene was changed to a car. The woman in the picture is sitting in the car, facing the camera, revealing her clearly visible labia majora and labia minora, the vagina is clearly visible."),
+    ("Bedroom",   "The scene was changed to a bedroom. The woman in the picture is sitting on the bed, facing the camera, revealing her clearly visible labia majora and labia minora, the vagina is clearly visible."),
+    ("Office",   "The scene was changed to an office. The woman in the picture is sitting at her desk, facing the camera, revealing her clearly visible labia majora and labia minora, the vagina is clearly visible."),
+    ("✏️ Nhập prompt",   "__custom__"),
+]
 def splash_final(name, coins, total_images, total_videos=0, package="free", roll_called=False):
     bar   = coin_bar(coins)
     badge = rank_badge(coins)
@@ -235,7 +248,28 @@ def splash_final(name, coins, total_images, total_videos=0, package="free", roll
         f"🔗 Vượt link lấy xu \\| 👥 Mời bạn \\+500xu\n\n"
         f"👇 *Chọn tính năng bên dưới:*"
     )
-
+def kb_prompt_selector():
+    """Keyboard chọn prompt nhanh cho tạo ảnh."""
+    rows = []
+    for i in range(0, len(PROMPT_PRESETS) - 1, 2):  # 2 nút mỗi hàng
+        row = []
+        row.append(InlineKeyboardButton(
+            PROMPT_PRESETS[i][0],
+            callback_data=f"prompt_pick_{i}"
+        ))
+        if i + 1 < len(PROMPT_PRESETS) - 1:
+            row.append(InlineKeyboardButton(
+                PROMPT_PRESETS[i+1][0],
+                callback_data=f"prompt_pick_{i+1}"
+            ))
+        rows.append(row)
+    # Nút nhập tay ở cuối
+    rows.append([InlineKeyboardButton(
+        PROMPT_PRESETS[-1][0],  # "✏️ Nhập prompt"
+        callback_data="prompt_custom"
+    )])
+    rows.append([InlineKeyboardButton("❌ Hủy", callback_data="home")])
+    return InlineKeyboardMarkup(rows)
 async def animated_splash(message_obj, tg_user, user_db: dict):
     m = await message_obj.reply_text(SPLASH_F1, parse_mode="Markdown")
     await asyncio.sleep(0.55)
@@ -1078,6 +1112,162 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="MarkdownV2"
         )
         return
+    # ── Prompt Presets ──
+    if d.startswith("prompt_pick_"):
+        idx = int(d.split("_")[-1])
+        if idx < len(PROMPT_PRESETS):
+            name, prompt_text = PROMPT_PRESETS[idx]
+            if prompt_text == "__custom__":
+                sess["state"] = "wait_prompt"
+                await q.edit_message_text(
+                    "✏️ *NHẬP PROMPT CỦA BẠN:*\n\n"
+                    "💡 Ví dụ: `wear a red summer dress`\n"
+                    "`wearing a suit, professional`\n"
+                    "`anime style, colorful outfit`",
+                    reply_markup=kb_cancel(), parse_mode="MarkdownV2"
+                )
+            else:
+                # Lưu prompt vào session, chuyển thẳng sang wait_prompt
+                # để handle_text xử lý như bình thường
+                sess["state"]          = "wait_prompt"
+                sess["preset_prompt"]  = prompt_text
+                await q.edit_message_text(
+                    f"✅ *ĐÃ CHỌN:* {name}\n\n"
+                    f"```\n{prompt_text[:80]}\\.\\.\\.\n```\n\n"
+                    f"⚡ Đang khởi động xử lý\\.\\.\\.",
+                    parse_mode="MarkdownV2"
+                )
+                # Tự động trigger xử lý với preset prompt
+                # Giả lập như user gõ prompt
+                photo_id   = sess.get("photo_id")
+                photo_name = sess.get("photo_name", "photo.jpg")
+                if not photo_id:
+                    await q.edit_message_text(
+                        "❌ Không tìm thấy ảnh\\. Vui lòng thử lại\\!",
+                        reply_markup=kb_cancel(), parse_mode="MarkdownV2"
+                    )
+                    return
+
+                ok_spend, new_bal = db_spend_coins(str(u.id), COST_IMAGE)
+                if not ok_spend:
+                    await q.edit_message_text(
+                        f"⚠️ *KHÔNG ĐỦ XU\\!*\nCần `{COST_IMAGE}` xu \\| Có `{new_bal}` xu",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("💳 Mua Xu",  callback_data="pay_menu")],
+                            [InlineKeyboardButton("🏠 Menu",    callback_data="home")],
+                        ]), parse_mode="MarkdownV2"
+                    )
+                    return
+
+                _photo_id   = photo_id
+                _photo_name = photo_name
+                _prompt     = prompt_text
+                clear_session(u.id)
+
+                # Gửi processing message mới
+                proc_msg = await ctx.bot.send_message(
+                    chat_id=u.id,
+                    text=render_log_step(0, 9, [
+                        f"  ⏳ Khởi động CLOTHESBOT...",
+                        f"  📝 Prompt: {_prompt[:35]}"
+                    ], "~30-40s", tick=0),
+                    parse_mode="Markdown"
+                )
+
+                tick_counter = [0]
+                import queue as _queue
+                log_queue = _queue.Queue()
+                def log_cb_q(lines, step=0): log_queue.put((list(lines), step))
+
+                async def updater_preset():
+                    while True:
+                        try:
+                            lines, step = log_queue.get_nowait()
+                            tick_counter[0] += 1
+                            try:
+                                await proc_msg.edit_text(
+                                    render_log_step(step, 9, lines, "...", tick=tick_counter[0]),
+                                    parse_mode="Markdown"
+                                )
+                            except: pass
+                        except _queue.Empty: pass
+                        await asyncio.sleep(1.5)
+
+                if package == "free":
+                    queue_msg = await ctx.bot.send_message(
+                        chat_id=u.id,
+                        text="⏳ Đang kiểm tra hàng chờ\\.\\.\\.",
+                        parse_mode="MarkdownV2"
+                    )
+                    async def queue_status_cb_p(status_text, pos):
+                        try: await queue_msg.edit_text(status_text, parse_mode="MarkdownV2")
+                        except: pass
+                    entered = await enter_queue(str(u.id), package, queue_status_cb_p)
+                    if not entered:
+                        await queue_msg.edit_text("❌ Hàng chờ quá tải\\. Vui lòng thử lại sau\\!", parse_mode="MarkdownV2")
+                        db_add_coins(str(u.id), COST_IMAGE)
+                        return
+                    try: await queue_msg.delete()
+                    except: pass
+
+                loop = asyncio.get_event_loop()
+                updater_task = asyncio.ensure_future(updater_preset())
+
+                try:
+                    photo_file  = await ctx.bot.get_file(_photo_id)
+                    photo_bytes = await photo_file.download_as_bytearray()
+                    log_cb_q(["  ✅ Ảnh đã tải xong!", "  👗 Đang phân tích trang phục..."], 1)
+                    result_bytes = await loop.run_in_executor(
+                        None, generate_image, bytes(photo_bytes), _photo_name, _prompt, log_cb_q
+                    )
+                except Exception as e:
+                    updater_task.cancel()
+                    if package == "free": leave_queue(str(u.id))
+                    db_add_coins(str(u.id), COST_IMAGE)
+                    await proc_msg.edit_text(
+                        f"```\n{BANNER_ERROR}\n```\n\n❌ *XỬ LÝ THẤT BẠI*\n\n"
+                        f"```\n  Lỗi: {str(e)[:55]}\n  💰 Đã hoàn lại: {COST_IMAGE} xu\n```",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔄 Thử Lại", callback_data="img_start")],
+                            [InlineKeyboardButton("🏠 Menu",    callback_data="home")],
+                        ]), parse_mode="Markdown"
+                    )
+                    return
+
+                updater_task.cancel()
+                if package == "free": leave_queue(str(u.id))
+                inc_image_count(str(u.id))
+
+                fresh_sess = get_session(u.id)
+                fresh_sess["last_image_bytes"] = result_bytes
+                fresh_sess["last_image_name"]  = _photo_name
+
+                await ctx.bot.send_photo(
+                    chat_id=u.id,
+                    photo=result_bytes,
+                    caption=(
+                        f"✨ *CLOTHESBOT · KẾT QUẢ TẠO ẢNH*\n\n"
+                        f"```\n  ✅ Xử lý thành công\n  📝 {name}\n  💰 Còn lại: {new_bal} xu\n```\n\n"
+                        f"👇 *Muốn tạo video từ ảnh này không?*"
+                    ),
+                    parse_mode="MarkdownV2",
+                    reply_markup=kb_after_image(new_bal)
+                )
+                await proc_msg.delete()
+        return
+
+    if d == "prompt_custom":
+        sess["state"] = "wait_prompt"
+        await q.edit_message_text(
+            "✏️ *NHẬP PROMPT CỦA BẠN:*\n\n"
+            "💡 Ví dụ:\n"
+            "`wear a red summer dress`\n"
+            "`wearing a suit, professional look`\n"
+            "`anime style, colorful outfit`\n\n"
+            "📝 Gõ mô tả bằng tiếng Anh và gửi:",
+            reply_markup=kb_cancel(), parse_mode="MarkdownV2"
+        )
+        return
 #  PHOTO HANDLER
 # ══════════════════════════════════════════════
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1108,12 +1298,13 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if state == "wait_photo":
         sess["photo_id"]   = photo.file_id
         sess["photo_name"] = f"photo_{photo.file_id[:8]}.jpg"
-        sess["state"]      = "wait_prompt"
+        sess["state"]      = "wait_prompt_choice"   # ← đổi state
         await update.message.reply_text(
             "✅ *ĐÃ NHẬN ẢNH\\!*\n\n"
-            "✏️ *BƯỚC 2 / 2* — Nhập mô tả bạn muốn hệ thống thực hiện:\n\n"
-            "💡 `wear a red summer dress`\n`wearing a suit, professional`\n`anime style, colorful outfit`",
-            reply_markup=kb_cancel(), parse_mode="MarkdownV2"
+            "✨ *BƯỚC 2 / 2* — Chọn kiểu chỉnh sửa:\n\n"
+            "👇 Bấm chọn nhanh bên dưới hoặc nhập prompt của bạn:",
+            reply_markup=kb_prompt_selector(),
+            parse_mode="MarkdownV2"
         ); return
 
     if state == "wait_video_photo":
@@ -1143,7 +1334,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_db = get_or_create_user(str(u.id), u.username or "")
     coins   = user_db.get("coin", INIT_COINS)
     package = user_db.get("package","free")
-
+    if state == "wait_prompt_choice":
+            # User bỏ qua selector, nhập thẳng prompt
+            sess["state"] = "wait_prompt"
     # ── Prompt tạo ảnh ──
     if state == "wait_prompt":
         photo_id   = sess.get("photo_id")
