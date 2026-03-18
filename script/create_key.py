@@ -24,13 +24,14 @@ class KeyManager:
 
     def create_key(self):
         id_key = str(uuid.uuid4())
+        key = str(uuid.uuid4())
         data = {
             "user": self.user_id,
             "id": id_key,
-            "key": str(uuid.uuid4()),
+            "key": key,
             "username": self.username,
             "use": False,
-            "url_shorten_key": self.shorten_link(f"{self.url_web}/{id_key}"),
+            "url_shorten_key": self.shorten_link(f"{self.url_web}/result_key?key={key}"),
         }
         res = self.supabase.table("external_link").insert(data).execute()
         return res.data[0]["id"]
