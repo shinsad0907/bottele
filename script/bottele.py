@@ -704,24 +704,38 @@ async def cmd_userinfo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
-    if not await check_join(ctx.bot, u.id):
-        await send_join_prompt(lambda text, **kw: update.message.reply_text(text, **kw))
-        return
 
-    # Kiểm tra deep link referral: /start ref_<inviter_id>
+    # Lưu ref arg vào session TRƯỚC khi check channel
+    # (để nếu user chưa join, sau khi join bấm lại vẫn còn ref)
     ref_inviter_id = None
     if ctx.args:
         arg = ctx.args[0]
         if arg.startswith("ref_"):
-            ref_inviter_id = arg[4:]   # lấy phần sau "ref_"
+            ref_inviter_id = arg[4:]
+            # Lưu tạm vào session để dùng lại nếu user chưa join channel
+            sess = get_session(u.id)
+            sess["pending_ref"] = ref_inviter_id
 
-    is_new_user = get_user(str(u.id)) is None   # kiểm tra trước khi tạo
+    if not await check_join(ctx.bot, u.id):
+        await send_join_prompt(lambda text, **kw: update.message.reply_text(text, **kw))
+        return
+
+    # Lấy ref từ session nếu không có trong args (trường hợp user join channel rồi bấm lại)
+    sess = get_session(u.id)
+    if not ref_inviter_id:
+        ref_inviter_id = sess.get("pending_ref")
+
+    # Kiểm tra user mới TRƯỚC khi tạo
+    is_new_user = get_user(str(u.id)) is None
     user_db = get_or_create_user(str(u.id), u.username or "")
 
     # Áp dụng referral nếu là user mới và có inviter hợp lệ
     if is_new_user and ref_inviter_id:
         success, new_inviter_coin, new_invitee_coin = apply_referral(str(u.id), ref_inviter_id)
         if success:
+            # Xóa pending_ref sau khi dùng
+            sess.pop("pending_ref", None)
+
             # Thông báo cho người mời
             try:
                 await ctx.bot.send_message(
@@ -738,7 +752,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     parse_mode="MarkdownV2"
                 )
             except Exception:
-                pass  # người mời đã block bot thì bỏ qua
+                pass
 
             # Thông báo cho người được mời
             await update.message.reply_text(
@@ -747,12 +761,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"```\n"
                 f"  🔗 Bạn đã join qua link mời\n"
                 f"  🎁 Nhận ngay: +{REFERRAL_REWARD_INVITEE} xu bonus\n"
-                f"  💰 Cộng vào ví của bạn rồi!\n"
+                f"  💰 Cộng vào ví của bạn rồi\\!\n"
                 f"```\n\n"
                 f"👇 Bắt đầu tạo ảnh\\, tạo video ngay nào\\!",
                 parse_mode="MarkdownV2"
             )
-            # Reload user_db sau khi cộng xu
+            # Reload để lấy số xu mới nhất
             user_db = get_or_create_user(str(u.id), u.username or "")
 
     full_clear_session(u.id)

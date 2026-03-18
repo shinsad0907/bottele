@@ -9,7 +9,7 @@ import httpx
 import logging
 from datetime import datetime, timezone, timedelta
 
-from templates.bottele import get_user
+# from templates.bottele import get_user
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def get_referral_stats(user_id: str) -> dict:
     }
 
 
-        
+
 def _url(table: str) -> str:
     return f"{SUPABASE_URL}/rest/v1/{table}"
 
