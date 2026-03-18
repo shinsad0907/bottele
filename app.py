@@ -107,7 +107,7 @@ def result_key():
     if not key:
         return "Missing key parameter", 400
 
-    return render_template("result.html", link=key, ip=request.remote_addr)
+    return render_template("result.html", key=key, ip=request.remote_addr)
 
 if __name__ == "__main__":
     app.run("index.html", debug=True, port=5000)

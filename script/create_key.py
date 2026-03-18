@@ -42,10 +42,15 @@ class KeyManager:
         return self.create_key()
 
     def check_key(self, key):
-        res = self.supabase.table("external_link").select("*").eq("id", key).execute()
+        # Query theo cột "key", không phải cột "id"
+        res = self.supabase.table("external_link").select("*").eq("key", key).execute()
         if not res.data:
             return False
+
         item = res.data[0]
-        if item["user"] == self.user_id and (item['use'] == False or item['use'] is None):
+        if item['use'] == False or item['use'] is None:
+            # Đánh dấu đã dùng
+            self.supabase.table("external_link").update({"use": True}).eq("key", key).execute()
             return True
+
         return False
