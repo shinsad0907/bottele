@@ -94,12 +94,12 @@ def getkey():
     if not res.data:
         return "Key not found", 404
 
-    full_url = res.data[0].get("url_shorten_key",link=full_url, ip=request.remote_addr)
+    full_url = res.data[0].get("url_shorten_key")
 
     if not full_url:
         return "Shortened link not found", 404
 
-    return render_template("getkey.html", link=full_url)
+    return render_template("getkey.html", link=full_url, ip=request.remote_addr)
 
 @app.route("/result_key")
 def result_key():
@@ -107,7 +107,7 @@ def result_key():
     if not key:
         return "Missing key parameter", 400
 
-    return render_template("result.html", link=key, ip=request.remote_add)
+    return render_template("result.html", link=key, ip=request.remote_addr)
 
 if __name__ == "__main__":
     app.run("index.html", debug=True, port=5000)
