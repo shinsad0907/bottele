@@ -99,7 +99,7 @@ def getkey():
     if not full_url:
         return "Shortened link not found", 404
 
-    return render_template("getkey.html", link=full_url, ip=request.remote_addr)
+    return render_template("getkey.html", full_url=full_url, ip=request.remote_addr)
 
 @app.route("/result_key")
 def result_key():
