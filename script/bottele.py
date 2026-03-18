@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
 WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-lilac.vercel.app").rstrip("/")
-COST_IMAGE    = 20
+COST_IMAGE    = 60
 COST_VIDEO    = 35
 
 REQUIRED_CHANNEL     = "@ClothessAI"
