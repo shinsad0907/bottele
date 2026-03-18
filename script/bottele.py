@@ -205,8 +205,14 @@ def splash_final(name, coins, total_images, total_videos=0, package="free", roll
     bar   = coin_bar(coins)
     badge = rank_badge(coins)
     pkg   = pkg_badge(package)
-    pkg_rc_reward = ROLLCALL_BY_PKG.get(package, 300)
-    rc_status = "✅ Đã điểm danh hôm nay" if roll_called else f"🎁 Chưa điểm danh \\(\\+{pkg_rc_reward} xu\\)"
+    pkg_rc_reward = ROLLCALL_BY_PKG.get(package, 0)
+
+    # FREE không có điểm danh
+    if package == "free":
+        rc_status = "🔗 Vượt link / 👥 Mời bạn để nhận xu"
+    else:
+        rc_status = "✅ Đã điểm danh hôm nay" if roll_called else f"🎁 Chưa điểm danh \\(\\+{pkg_rc_reward} xu\\)"
+
     return (
         "```\n╔══════════════════════════════════════╗\n"
         "║    ██████╗██╗      ██████╗ ████████╗ ║\n"
@@ -219,14 +225,14 @@ def splash_final(name, coins, total_images, total_videos=0, package="free", roll
         f"👋 Xin chào, *{esc(name)}*\\!\n\n"
         f"┌─ 📊 *THÔNG TIN TÀI KHOẢN* ──┐\n"
         f"│  {badge}  ·  {pkg}\n"
-        f"│  💰 Xu: `{coins}` {bar}\n"
+        f"│  💰 Xu: `{coins}` {coin_bar(coins)}\n"
         f"│  🎨 Ảnh đã tạo:   `{total_images}`\n"
         f"│  🎬 Video đã tạo: `{total_videos}`\n"
         f"│  📅 {rc_status}\n"
         f"└────────────────────────────────┘\n\n"
         f"⚡ Chi phí tạo ảnh: `{COST_IMAGE} xu / lần`\n"
         f"🎬 Chi phí tạo video: `{COST_VIDEO} xu / lần`\n"
-        f"📅 Điểm danh hàng ngày: `+{ROLLCALL_REWARD} xu`\n\n"
+        f"🔗 Vượt link lấy xu \\| 👥 Mời bạn \\+500xu\n\n"
         f"👇 *Chọn tính năng bên dưới:*"
     )
 
@@ -263,23 +269,28 @@ def kb_main(coins, package="free", roll_called=False):
     badge     = rank_badge(coins)
     pkg       = pkg_badge(package)
     pkg_rc_reward = ROLLCALL_BY_PKG.get(package, 300)
-    rc_label  = "✅ Đã Điểm Danh" if roll_called else f"📅 Điểm Danh (+{pkg_rc_reward}xu)"
+
+    # FREE không có điểm danh → hiện nút mua VIP thay thế
+    if package == "free":
+        rc_btn = InlineKeyboardButton("⭐ Nâng VIP để Điểm Danh", callback_data="pay_menu")
+    else:
+        rc_label = "✅ Đã Điểm Danh" if roll_called else f"📅 Điểm Danh (+{pkg_rc_reward}xu)"
+        rc_btn = InlineKeyboardButton(rc_label, callback_data="rollcall")
+
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
         [InlineKeyboardButton("🎨 ✨  TẠO ẢNH  ✨ 🎨",     callback_data="img_start")],
         [InlineKeyboardButton("🎬 ✨  TẠO VIDEO  ✨ 🎬",    callback_data="vid_start")],
         [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
-        [InlineKeyboardButton("💎 Ví Xu",                   callback_data="balance"),
-         InlineKeyboardButton(rc_label,                     callback_data="rollcall")],
-        [InlineKeyboardButton("💳 Mua Xu / VIP",            callback_data="pay_menu")],
-        [InlineKeyboardButton("🔗 Vượt link lấy xu?",       callback_data="external_link"),
-         InlineKeyboardButton("👥 Mời Bạn (+500xu)",        callback_data="referral")],  # ← thêm
-        [InlineKeyboardButton("📊 Thống Kê",                callback_data="stats"),
-         InlineKeyboardButton("📖 Hướng Dẫn",               callback_data="help")],
+        [InlineKeyboardButton("💎 Ví Xu", callback_data="balance"), rc_btn],
+        [InlineKeyboardButton("💳 Mua Xu / VIP",      callback_data="pay_menu")],
+        [InlineKeyboardButton("🔗 Vượt link lấy xu?", callback_data="external_link"),
+         InlineKeyboardButton("👥 Mời Bạn (+500xu)",  callback_data="referral")],
+        [InlineKeyboardButton("📊 Thống Kê",           callback_data="stats"),
+         InlineKeyboardButton("📖 Hướng Dẫn",          callback_data="help")],
         [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
         [InlineKeyboardButton(f"{badge} · {pkg}  |  💰 {coins} xu", callback_data="balance")],
     ])
-
 def kb_back():
     return InlineKeyboardMarkup([[InlineKeyboardButton("◀️  Quay Về Menu", callback_data="home")]])
 
@@ -889,15 +900,39 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if d == "help":
         await q.edit_message_text(msg_help(), reply_markup=kb_back(), parse_mode="MarkdownV2"); return
 
-    # ── Roll Call (Điểm danh) ──
+# ── Roll Call (Điểm danh) ──
     if d == "rollcall":
+        # Gói FREE không được điểm danh
+        if package == "free":
+            await q.edit_message_text(
+                f"```\n{BANNER_ERROR}\n```\n\n"
+                f"⛔ *ĐIỂM DANH CHỈ DÀNH CHO VIP\\!*\n\n"
+                f"```\n"
+                f"  🆓 FREE     → Không có điểm danh\n"
+                f"  👑 VIP      → +1\\.500 xu/ngày\n"
+                f"  💎 VIP PRO  → +5\\.000 xu/ngày\n"
+                f"```\n\n"
+                f"💡 *Cách nhận xu miễn phí:*\n"
+                f"🔗 Vượt link → nhận xu mỗi ngày\n"
+                f"👥 Mời bạn bè → \\+500 xu / người\n\n"
+                f"⬆️ Nâng cấp VIP để điểm danh hàng ngày\\!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Nâng Cấp VIP Ngay!",    callback_data="pay_menu")],
+                    [InlineKeyboardButton("🔗 Vượt Link Lấy Xu",      callback_data="external_link")],
+                    [InlineKeyboardButton("👥 Mời Bạn (+500xu)",       callback_data="referral")],
+                    [InlineKeyboardButton("◀️ Quay Về Menu",           callback_data="home")],
+                ]),
+                parse_mode="MarkdownV2"
+            )
+            return
+
         success, new_coin, reward = do_rollcall(str(u.id))
         if success:
-            pkg_label = {"free": "🆓 FREE", "vip": "👑 VIP", "vip_pro": "💎 VIP PRE"}.get(package, "FREE")
+            pkg_label = {"vip": "👑 VIP", "vip_pro": "💎 VIP PRO"}.get(package, package.upper())
             await q.edit_message_text(
                 f"```\n{BANNER_SUCCESS}\n```\n\n"
                 f"📅 *ĐIỂM DANH THÀNH CÔNG\\!*\n\n"
-                f"```\n  🏷  Gói:        {pkg_label}\n  🎁 Nhận được:  +{reward} xu\n  💰 Số dư mới:  {new_coin} xu\n```\n\n"
+                f"```\n  🏷  Gói:        {pkg_label}\n  🎁 Nhận được:  \\+{reward} xu\n  💰 Số dư mới:  {new_coin} xu\n```\n\n"
                 f"✅ Quay lại lúc 00:00 ngày mai để điểm danh tiếp\\!",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🎨 Tạo Ảnh Ngay!", callback_data="img_start"),
@@ -908,7 +943,7 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="MarkdownV2"
             )
         else:
-            pkg_reward = ROLLCALL_BY_PKG.get(package, 300)
+            pkg_reward = ROLLCALL_BY_PKG.get(package, 0)
             await q.answer(f"✅ Đã điểm danh hôm nay rồi! (+{pkg_reward} xu mỗi ngày)", show_alert=True)
         return
 
