@@ -35,7 +35,7 @@ async def process_update(data):
 
 @app.route("/")
 def index():
-    return "Bot dang chay!"
+    return render_template("index.html")
 
 @app.route(f"/webhook/<token>", methods=["POST"])
 def webhook(token):
