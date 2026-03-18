@@ -27,6 +27,7 @@ class KeyManager:
         data = {
             "user": self.user_id,
             "id": id_key,
+            "key": str(uuid.uuid4()),
             "username": self.username,
             "use": False,
             "url_shorten_key": self.shorten_link(f"{self.url_web}/{id_key}"),

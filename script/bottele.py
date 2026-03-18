@@ -1194,7 +1194,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         db_add_coins(str(u.id), 300)
         await update.message.reply_text(
-            "✅ KEY hợp lệ! Bạn đã được cộng 300 xu.",
+            "✅ KEY hợp lệ\\! Bạn đã được cộng 300 xu\\.",
             parse_mode="MarkdownV2"
         )
 
