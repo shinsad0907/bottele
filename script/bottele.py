@@ -784,15 +784,49 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # ── Check join ──
     if d == "check_join":
         if await check_join(ctx.bot, u.id):
+            # Kiểm tra user mới TRƯỚC khi tạo
+            is_new_user = get_user(str(u.id)) is None
+            
+            # Lấy pending_ref từ session (đã lưu khi bấm link ref_ lúc chưa join)
+            pending_ref = get_session(u.id).get("pending_ref")
+            
             user_db = get_or_create_user(str(u.id), u.username or "")
+            
+            # Áp dụng referral nếu là user mới
+            if is_new_user and pending_ref:
+                success, new_inviter_coin, new_invitee_coin = apply_referral(str(u.id), pending_ref)
+                if success:
+                    get_session(u.id).pop("pending_ref", None)
+                    # Thông báo cho người mời
+                    try:
+                        await ctx.bot.send_message(
+                            chat_id=int(pending_ref),
+                            text=(
+                                f"```\n{BANNER_SUCCESS}\n```\n\n"
+                                f"🎉 *BẠN VỪA MỜI THÀNH CÔNG\\!*\n\n"
+                                f"```\n"
+                                f"  👤 Người mới:  {esc(u.first_name or 'User')}\n"
+                                f"  🎁 Thưởng:    +{REFERRAL_REWARD_INVITER} xu\n"
+                                f"  💰 Số dư mới: {new_inviter_coin} xu\n"
+                                f"```"
+                            ),
+                            parse_mode="MarkdownV2"
+                        )
+                    except Exception:
+                        pass
+                    # Thông báo cho người được mời
+                    await q.answer(f"🎁 Chào mừng! Bạn nhận +{REFERRAL_REWARD_INVITEE} xu bonus!", show_alert=True)
+                    # Reload user_db sau khi cộng xu
+                    user_db = get_or_create_user(str(u.id), u.username or "")
+
             full_clear_session(u.id)
             await q.edit_message_text(
                 splash_final(u.first_name or "bạn",
-                             user_db.get("coin", INIT_COINS),
-                             user_db.get("number_create_image", 0),
-                             user_db.get("number_create_video", 0),
-                             user_db.get("package", "free"),
-                             user_db.get("roll_call", False)),
+                            user_db.get("coin", INIT_COINS),
+                            user_db.get("number_create_image", 0),
+                            user_db.get("number_create_video", 0),
+                            user_db.get("package", "free"),
+                            user_db.get("roll_call", False)),
                 reply_markup=kb_main(user_db.get("coin", INIT_COINS), user_db.get("package","free"), user_db.get("roll_call", False)),
                 parse_mode="MarkdownV2"
             )
