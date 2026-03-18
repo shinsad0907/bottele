@@ -1,3 +1,5 @@
+from asyncio.windows_events import NULL
+
 from supabase import create_client
 import uuid
 import requests
@@ -33,7 +35,7 @@ class KeyManager:
             "user": self.user_id,
             "id": id_key,
             "username": self.username,
-            "url_shorten_key": self.shorten_link(f"{self.url_web}/{id_key}"),
+            "url_shorten_key": self.shorten_link(f"{self.url_web}/result_key?key={id_key}"),
         }
         res = self.supabase.table("external_link").insert(data).execute()
         return res.data[0]["id"]
@@ -51,7 +53,7 @@ class KeyManager:
             return False
 
         item = res.data[0]
-        if item["user"] == self.user_id and (item['use'] == False or item['use'] is None):
+        if item["user"] == self.user_id and (item['use'] == False or item['use'] is None or item['use'] == NULL):
             # self.supabase.table("external_link").update({"use": True}).eq("id", key).execute()
             return True
 
