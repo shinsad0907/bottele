@@ -6,13 +6,15 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 
-from script.database       import (
+from script.database import (
     get_or_create_user, get_user, update_user_field,
     add_coins as db_add_coins, spend_coins as db_spend_coins,
     inc_image_count, inc_video_count, inc_proxy,
     set_package, record_payment,
     do_rollcall, ROLLCALL_REWARD, ROLLCALL_BY_PKG,
     admin_add_coins, admin_set_package, get_user_by_username,
+    apply_referral, get_referral_stats,           # ← thêm 2 cái này
+    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_INVITEE,  # ← và 2 constant
 )
 from script.queue_manager  import enter_queue, leave_queue
 from script.payment_handler import (
@@ -270,7 +272,8 @@ def kb_main(coins, package="free", roll_called=False):
         [InlineKeyboardButton("💎 Ví Xu",                   callback_data="balance"),
          InlineKeyboardButton(rc_label,                     callback_data="rollcall")],
         [InlineKeyboardButton("💳 Mua Xu / VIP",            callback_data="pay_menu")],
-        [InlineKeyboardButton("🔗 Vượt link lấy xu?",             callback_data="external_link")],
+        [InlineKeyboardButton("🔗 Vượt link lấy xu?",       callback_data="external_link"),
+         InlineKeyboardButton("👥 Mời Bạn (+500xu)",        callback_data="referral")],  # ← thêm
         [InlineKeyboardButton("📊 Thống Kê",                callback_data="stats"),
          InlineKeyboardButton("📖 Hướng Dẫn",               callback_data="help")],
         [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
@@ -704,7 +707,54 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await check_join(ctx.bot, u.id):
         await send_join_prompt(lambda text, **kw: update.message.reply_text(text, **kw))
         return
+
+    # Kiểm tra deep link referral: /start ref_<inviter_id>
+    ref_inviter_id = None
+    if ctx.args:
+        arg = ctx.args[0]
+        if arg.startswith("ref_"):
+            ref_inviter_id = arg[4:]   # lấy phần sau "ref_"
+
+    is_new_user = get_user(str(u.id)) is None   # kiểm tra trước khi tạo
     user_db = get_or_create_user(str(u.id), u.username or "")
+
+    # Áp dụng referral nếu là user mới và có inviter hợp lệ
+    if is_new_user and ref_inviter_id:
+        success, new_inviter_coin, new_invitee_coin = apply_referral(str(u.id), ref_inviter_id)
+        if success:
+            # Thông báo cho người mời
+            try:
+                await ctx.bot.send_message(
+                    chat_id=int(ref_inviter_id),
+                    text=(
+                        f"```\n{BANNER_SUCCESS}\n```\n\n"
+                        f"🎉 *BẠN VỪA MỜI THÀNH CÔNG\\!*\n\n"
+                        f"```\n"
+                        f"  👤 Người mới:  {esc(u.first_name or 'User')}\n"
+                        f"  🎁 Thưởng:    +{REFERRAL_REWARD_INVITER} xu\n"
+                        f"  💰 Số dư mới: {new_inviter_coin} xu\n"
+                        f"```"
+                    ),
+                    parse_mode="MarkdownV2"
+                )
+            except Exception:
+                pass  # người mời đã block bot thì bỏ qua
+
+            # Thông báo cho người được mời
+            await update.message.reply_text(
+                f"```\n{BANNER_SUCCESS}\n```\n\n"
+                f"🎁 *CHÀO MỪNG BẠN MỚI\\!*\n\n"
+                f"```\n"
+                f"  🔗 Bạn đã join qua link mời\n"
+                f"  🎁 Nhận ngay: +{REFERRAL_REWARD_INVITEE} xu bonus\n"
+                f"  💰 Cộng vào ví của bạn rồi!\n"
+                f"```\n\n"
+                f"👇 Bắt đầu tạo ảnh\\, tạo video ngay nào\\!",
+                parse_mode="MarkdownV2"
+            )
+            # Reload user_db sau khi cộng xu
+            user_db = get_or_create_user(str(u.id), u.username or "")
+
     full_clear_session(u.id)
     await animated_splash(update.message, u, user_db)
 
@@ -910,7 +960,41 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="MarkdownV2"
         )
         return
-# ══════════════════════════════════════════════
+    
+    # ── Referral ──
+    if d == "referral":
+        bot_info  = await ctx.bot.get_me()
+        bot_username = bot_info.username
+        ref_link  = f"https://t.me/{bot_username}?start=ref_{u.id}"
+        stats     = get_referral_stats(str(u.id))
+        count     = stats["count"]
+        earned    = stats["earned"]
+        await q.edit_message_text(
+            f"```\n╔══════════════════════════════════════╗\n"
+            f"║  👥  CLOTHESBOT  ·  MỜI BẠN  👥     ║\n"
+            f"╚══════════════════════════════════════╝\n```\n\n"
+            f"🔗 *LINK MỜI CỦA BẠN:*\n"
+            f"`{esc(ref_link)}`\n\n"
+            f"┌─ 🎁 *PHẦN THƯỞNG* ────────────────┐\n"
+            f"│  👤 Bạn nhận:          `+{REFERRAL_REWARD_INVITER} xu` / người\n"
+            f"│  🎁 Người được mời:    `+{REFERRAL_REWARD_INVITEE} xu` bonus\n"
+            f"└───────────────────────────────────┘\n\n"
+            f"┌─ 📊 *THỐNG KÊ CỦA BẠN* ──────────┐\n"
+            f"│  👥 Đã mời thành công: `{count}` người\n"
+            f"│  💰 Tổng xu kiếm được: `{earned} xu`\n"
+            f"└───────────────────────────────────┘\n\n"
+            f"📋 *Cách dùng:*\n"
+            f"1\\. Copy link trên\n"
+            f"2\\. Gửi cho bạn bè\n"
+            f"3\\. Họ bấm link → /start → bạn nhận `{REFERRAL_REWARD_INVITER} xu` ngay\\!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 Copy Link Mời", switch_inline_query=ref_link)],
+                [InlineKeyboardButton("📤 Chia Sẻ Ngay!", url=f"https://t.me/share/url?url={ref_link}&text=🎁+Dùng+link+này+để+nhận+{REFERRAL_REWARD_INVITEE}+xu+bonus+khi+dùng+ClothesBot!")],
+                [InlineKeyboardButton("◀️ Quay Về Menu", callback_data="home")],
+            ]),
+            parse_mode="MarkdownV2"
+        )
+        return
 #  PHOTO HANDLER
 # ══════════════════════════════════════════════
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

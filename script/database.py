@@ -9,6 +9,8 @@ import httpx
 import logging
 from datetime import datetime, timezone, timedelta
 
+from templates.bottele import get_user
+
 log = logging.getLogger(__name__)
 
 SUPABASE_URL = "https://ljywfdvcwyhixuwffecp.supabase.co"
@@ -32,6 +34,59 @@ HEADERS = {
     "Prefer":        "return=representation",
 }
 
+REFERRAL_REWARD_INVITER = 500   # người mời
+REFERRAL_REWARD_INVITEE = 300   # người được mời
+
+REFERRAL_REWARD_INVITER = 500
+REFERRAL_REWARD_INVITEE = 300
+
+def apply_referral(new_user_id: str, inviter_id: str) -> tuple[bool, int, int]:
+    """
+    Ghi nhận referral khi người mới /start lần đầu qua link mời.
+    Trả về (success, new_coin_inviter, new_coin_invitee)
+    """
+    user = get_user(new_user_id)
+    if not user:
+        return False, 0, 0
+    if user.get("referred_by"):       # đã được mời rồi
+        return False, 0, 0
+    if new_user_id == inviter_id:     # tự mời mình
+        return False, 0, 0
+
+    inviter = get_user(inviter_id)
+    if not inviter:
+        return False, 0, 0
+
+    # Cộng xu + tăng referral_count cho người mời
+    new_inviter_coin = (inviter.get("coin") or 0) + REFERRAL_REWARD_INVITER
+    _update("manager_user", {"id_user": inviter_id}, {
+        "coin":           new_inviter_coin,
+        "referral_count": (inviter.get("referral_count") or 0) + 1,
+    })
+
+    # Cộng xu + ghi referred_by cho người được mời
+    new_invitee_coin = (user.get("coin") or 0) + REFERRAL_REWARD_INVITEE
+    _update("manager_user", {"id_user": new_user_id}, {
+        "coin":        new_invitee_coin,
+        "referred_by": inviter_id,
+    })
+
+    return True, new_inviter_coin, new_invitee_coin
+
+
+def get_referral_stats(user_id: str) -> dict:
+    """Trả về số người đã mời và tổng xu kiếm được từ referral."""
+    user = get_user(str(user_id))
+    if not user:
+        return {"count": 0, "earned": 0}
+    count = user.get("referral_count") or 0
+    return {
+        "count":  count,
+        "earned": count * REFERRAL_REWARD_INVITER,
+    }
+
+
+        
 def _url(table: str) -> str:
     return f"{SUPABASE_URL}/rest/v1/{table}"
 
