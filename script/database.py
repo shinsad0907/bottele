@@ -85,7 +85,76 @@ def get_referral_stats(user_id: str) -> dict:
         "earned": count * REFERRAL_REWARD_INVITER,
     }
 
+# ── EXTERNAL LINK · IP RATE LIMIT ───────────────────────────────────────────
+# Bảng external_link cần có các cột:
+#   ip                  TEXT
+#   date                TEXT  (YYYY-MM-DD)
+#   number_external_date INTEGER  (số lần vượt link trong ngày)
+#
+# Thêm đoạn này vào cuối file database.py của bạn
+# ─────────────────────────────────────────────────────────────────────────────
 
+MAX_EXTERNAL_PER_DAY = 2   # giới hạn số lần vượt link mỗi IP mỗi ngày
+
+def check_and_inc_ip_limit(ip: str) -> tuple[bool, int]:
+    """
+    Kiểm tra và tăng bộ đếm vượt link theo IP + ngày.
+
+    Trả về:
+        (True,  số_lần_hiện_tại)  → IP còn trong giới hạn, đã tăng counter
+        (False, số_lần_hiện_tại)  → IP đã đạt / vượt giới hạn, KHÔNG tăng
+    """
+    today = vn_today_str()
+
+    # Tìm record IP hôm nay
+    try:
+        params = {"ip": f"eq.{ip}", "date_external_link": f"eq.{today}"}
+        r = httpx.get(_url("external_link"), headers=HEADERS, params=params, timeout=10)
+        r.raise_for_status()
+        rows = r.json()
+    except Exception as e:
+        log.error(f"check_and_inc_ip_limit select error: {e}")
+        # Lỗi mạng → cho qua để không block user oan
+        return True, 0
+
+    if rows:
+        # Đã có record hôm nay
+        row     = rows[0]
+        row_id  = row.get("id")
+        current = row.get("number_external_date") or 0
+
+        if current >= MAX_EXTERNAL_PER_DAY:
+            # Đã đạt giới hạn → không cho qua
+            return False, current
+
+        # Còn trong giới hạn → tăng counter
+        new_count = current + 1
+        try:
+            httpx.patch(
+                _url("external_link"),
+                headers=HEADERS,
+                params={"id": f"eq.{row_id}"},
+                json={"number_external_date": new_count},
+                timeout=10,
+            )
+        except Exception as e:
+            log.error(f"check_and_inc_ip_limit update error: {e}")
+
+        return True, new_count
+
+    else:
+        # Chưa có record → tạo mới (lần đầu tiên hôm nay)
+        try:
+            httpx.post(
+                _url("external_link"),
+                headers=HEADERS,
+                json={"ip": ip, "date_external_link": today, "number_external_date": 1},
+                timeout=10,
+            )
+        except Exception as e:
+            log.error(f"check_and_inc_ip_limit insert error: {e}")
+
+        return True, 1
 
 def _url(table: str) -> str:
     return f"{SUPABASE_URL}/rest/v1/{table}"
