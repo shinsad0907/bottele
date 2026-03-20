@@ -85,107 +85,102 @@ def get_referral_stats(user_id: str) -> dict:
         "earned": count * REFERRAL_REWARD_INVITER,
     }
 
-"""
-PATCH cho database.py
-─────────────────────
-Thay thế hoàn toàn hàm check_and_inc_ip_limit cũ bằng hàm dưới đây.
-
-Schema bảng external_link (theo ảnh Supabase):
-  id                   uuid (PK)
-  use                  bool
-  url_shorten_key      text
-  username             text
-  ip                   text       ← cột lưu IP
-  date_external_link   date       ← cột kiểu DATE (YYYY-MM-DD)
-  number_external_date int8       ← đếm số lần vượt link trong ngày
-"""
-
-MAX_EXTERNAL_PER_DAY = 2  # giới hạn số lần / IP / ngày
+MAX_EXTERNAL_PER_DAY = 2
 
 
 def check_and_inc_ip_limit(ip: str) -> tuple[bool, int]:
     """
-    Tìm record trong bảng external_link có ip = <ip> VÀ date_external_link = hôm nay.
-    - Nếu chưa có record nào cho IP này hôm nay:
-        → Tìm 1 row có ip IS NULL để "ghi nhận" IP vào đó (update),
-          hoặc nếu không có row trống thì chỉ đếm trong bộ nhớ (fallback).
-        → Thực tế: ta lưu tracking IP vào một row riêng bằng cách
-          UPDATE row có ip = ip này hoặc INSERT nếu Supabase cho phép.
+    Tracking số lần vượt link theo IP + ngày.
+    Dùng bảng ip_limit riêng (tạo trong Supabase):
+        id                  uuid default gen_random_uuid()
+        ip                  text
+        date_check          text   (YYYY-MM-DD)
+        count               int8   default 0
 
-    *** CÁCH ĐƠN GIẢN NHẤT PHÙ HỢP VỚI SCHEMA HIỆN TẠI ***
-    Dùng 1 row đặc biệt (use=FALSE, url_shorten_key='__ip_track__') để tracking.
-    Mỗi IP có 1 row riêng. Nếu chưa có thì INSERT, nếu có thì UPDATE counter.
-
-    Trả về:
-        (True,  count)  → còn trong giới hạn, đã tăng counter
-        (False, count)  → đã đạt giới hạn
+    Nếu muốn dùng bảng external_link thì đọc comment bên dưới.
     """
-    today = vn_today_str()  # hàm này đã có sẵn trong database.py
+    today = vn_today_str()
 
+    # ── DEBUG: lấy toàn bộ bảng để xem cấu trúc thực tế ─────────────────────
     try:
-        # ── Bước 1: Tìm row tracking cho IP này ──────────────────────────────
-        r = httpx.get(
+        r_debug = httpx.get(
             _url("external_link"),
             headers=HEADERS,
-            params={
-                "ip":                 f"eq.{ip}",
-                "url_shorten_key":    "eq.__ip_track__",
-            },
+            params={"limit": "1"},
             timeout=10,
         )
-        r.raise_for_status()
+        log.info(f"[IP_LIMIT DEBUG] status={r_debug.status_code} body={r_debug.text[:300]}")
+    except Exception as e:
+        log.error(f"[IP_LIMIT DEBUG] error: {e}")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Lấy tất cả row của IP này (không filter date, tránh lỗi 400)
+    try:
+        r = httpx.get(
+            _url("external_link"),
+            headers={**HEADERS, "Prefer": "return=representation"},
+            params={"ip": f"eq.{ip}"},
+            timeout=10,
+        )
+        log.info(f"[IP_LIMIT] ip filter status={r.status_code} body={r.text[:200]}")
+
+        if not r.is_success:
+            log.error(f"[IP_LIMIT] 400 detail: {r.text}")
+            return True, 0  # lỗi → cho qua
+
         rows = r.json()
 
     except Exception as e:
-        log.error(f"check_and_inc_ip_limit select error: {e}")
-        return True, 0  # lỗi mạng → cho qua
+        log.error(f"check_and_inc_ip_limit error: {e}")
+        return True, 0
 
-    if rows:
-        row         = rows[0]
-        row_id      = row.get("id")
-        last_date   = str(row.get("date_external_link") or "")
-        current     = row.get("number_external_date") or 0
+    # Tìm row của IP này có date = hôm nay
+    today_row = None
+    for row in rows:
+        d = str(row.get("date_external_link") or row.get("date") or "")
+        # So sánh linh hoạt: "2026-03-20" có trong "2026-03-20T00:00:00..."
+        if today in d:
+            today_row = row
+            break
 
-        # Nếu ngày khác → reset counter về 0
-        if last_date != today:
-            current = 0
+    if today_row:
+        row_id  = today_row.get("id")
+        current = today_row.get("number_external_date") or 0
 
         if current >= MAX_EXTERNAL_PER_DAY:
-            return False, current  # đã hết lượt
+            return False, current
 
-        # Tăng counter + cập nhật ngày
         new_count = current + 1
         try:
             httpx.patch(
                 _url("external_link"),
                 headers=HEADERS,
                 params={"id": f"eq.{row_id}"},
-                json={
-                    "number_external_date": new_count,
-                    "date_external_link":   today,   # luôn cập nhật ngày
-                },
+                json={"number_external_date": new_count},
                 timeout=10,
             )
         except Exception as e:
-            log.error(f"check_and_inc_ip_limit update error: {e}")
+            log.error(f"check_and_inc_ip_limit patch error: {e}")
 
         return True, new_count
 
     else:
-        # ── Chưa có row tracking → INSERT mới ────────────────────────────────
+        # Chưa có row cho IP này hôm nay → INSERT
         try:
-            httpx.post(
+            insert_data = {
+                "ip":                   ip,
+                "date_external_link":   today,
+                "number_external_date": 1,
+                "use":                  False,
+                "url_shorten_key":      "__ip_track__",
+            }
+            ri = httpx.post(
                 _url("external_link"),
                 headers=HEADERS,
-                json={
-                    "ip":                   ip,
-                    "url_shorten_key":      "__ip_track__",
-                    "use":                  False,
-                    "date_external_link":   today,
-                    "number_external_date": 1,
-                },
+                json=insert_data,
                 timeout=10,
             )
+            log.info(f"[IP_LIMIT] insert status={ri.status_code} body={ri.text[:200]}")
         except Exception as e:
             log.error(f"check_and_inc_ip_limit insert error: {e}")
 
