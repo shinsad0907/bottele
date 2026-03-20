@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Giới Hạn Truy Cập – ClothesBot</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #eef0f8;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 20px;
+      padding: 40px 32px 36px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 8px 40px rgba(80,80,140,0.13);
+      animation: fadeUp 0.4s ease both;
+      text-align: center;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(18px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Icon vòng tròn đỏ */
+    .icon-wrap {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #ff4d4f, #ff7875);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 20px;
+      box-shadow: 0 6px 20px rgba(255,77,79,0.30);
+    }
+    .icon-wrap svg { color: #fff; }
+
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      font-size: 0.875rem;
+      color: #888aab;
+      margin-bottom: 28px;
+      line-height: 1.6;
+    }
+
+    /* Thẻ thông tin */
+    .info-box {
+      background: #fff5f5;
+      border: 1.5px solid #ffd6d6;
+      border-radius: 14px;
+      padding: 16px 20px;
+      margin-bottom: 22px;
+      text-align: left;
+    }
+
+    .info-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.875rem;
+      color: #444;
+      margin-bottom: 8px;
+    }
+    .info-row:last-child { margin-bottom: 0; }
+
+    .info-row .label {
+      color: #888aab;
+      font-weight: 500;
+      min-width: 80px;
+    }
+    .info-row .val {
+      font-family: monospace;
+      font-weight: 600;
+      color: #d32f2f;
+    }
+
+    /* Divider */
+    .divider {
+      border: none;
+      border-top: 1px solid #f0f0f8;
+      margin: 0 0 22px;
+    }
+
+    /* Gợi ý */
+    .tips {
+      text-align: left;
+      margin-bottom: 26px;
+    }
+    .tips-title {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #5b5fc7;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 12px;
+    }
+    .tip {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 10px;
+      font-size: 0.875rem;
+      color: #444466;
+      line-height: 1.55;
+    }
+    .tip-icon {
+      font-size: 1rem;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    /* Nút */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      border: none;
+      border-radius: 12px;
+      padding: 14px;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+      margin-bottom: 10px;
+    }
+
+    .btn-primary {
+      background: #5b5fc7;
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(91,95,199,0.30);
+    }
+    .btn-primary:hover {
+      background: #4a4eb5;
+      transform: translateY(-2px);
+      box-shadow: 0 7px 22px rgba(91,95,199,0.38);
+    }
+    .btn-primary:active { transform: translateY(0); }
+
+    .btn-outline {
+      background: transparent;
+      border: 1.5px solid #5b5fc7;
+      color: #5b5fc7;
+    }
+    .btn-outline:hover { background: rgba(91,95,199,0.07); }
+
+    /* Reset timer note */
+    .reset-note {
+      font-size: 0.78rem;
+      color: #bbb;
+      margin-top: 14px;
+    }
+    .reset-note strong { color: #888aab; }
+  </style>
+</head>
+<body>
+  <div class="card">
+
+    <!-- Icon -->
+    <div class="icon-wrap">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/>
+        <line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+    </div>
+
+    <h1>⛔ Đã Đạt Giới Hạn Hôm Nay</h1>
+    <p class="subtitle">
+      Mỗi địa chỉ IP chỉ được vượt link <strong>{{ limit }} lần / ngày</strong>.<br/>
+      IP của bạn đã dùng hết lượt hôm nay.
+    </p>
+
+    <!-- Thông tin IP -->
+    <div class="info-box">
+      <div class="info-row">
+        <span class="label">📍 IP của bạn</span>
+        <span class="val">{{ ip }}</span>
+      </div>
+      <div class="info-row">
+        <span class="label">🔢 Đã vượt</span>
+        <span class="val">{{ count }} / {{ limit }} lần</span>
+      </div>
+      <div class="info-row">
+        <span class="label">⏰ Reset lúc</span>
+        <span class="val">00:00 hôm sau (GMT+7)</span>
+      </div>
+    </div>
+
+    <hr class="divider"/>
+
+    <!-- Gợi ý -->
+    <div class="tips">
+      <div class="tips-title">💡 Bạn có thể làm gì?</div>
+      <div class="tip">
+        <span class="tip-icon">📱</span>
+        <span>Chuyển sang mạng <strong>4G / 5G</strong> điện thoại để đổi IP và vượt link tiếp.</span>
+      </div>
+      <div class="tip">
+        <span class="tip-icon">💳</span>
+        <span>Hoặc <strong>mua xu</strong> trực tiếp trong bot để không cần vượt link.</span>
+      </div>
+      <div class="tip">
+        <span class="tip-icon">⏳</span>
+        <span>Chờ đến <strong>00:00 ngày mai</strong> – bộ đếm tự động reset.</span>
+      </div>
+    </div>
+
+    <!-- Nút hành động -->
+    <a href="https://t.me/clothessAI_bot" class="btn btn-primary">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2.5">
+        <path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/>
+      </svg>
+      Mua Xu Trong Bot
+    </a>
+
+    <a href="javascript:history.back()" class="btn btn-outline">
+      ← Quay Lại
+    </a>
+
+    <p class="reset-note">
+      Giới hạn tự reset lúc <strong>00:00 giờ Việt Nam</strong> mỗi ngày.
+    </p>
+  </div>
+</body>
+</html>
