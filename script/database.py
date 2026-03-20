@@ -87,67 +87,111 @@ def get_referral_stats(user_id: str) -> dict:
 
 MAX_EXTERNAL_PER_DAY = 2
 
+# Tên cột thật trong bảng external_link — sẽ được tự detect khi chạy lần đầu
+_IP_COL   = None   # tên cột chứa IP
+_DATE_COL = None   # tên cột chứa ngày
+_CNT_COL  = None   # tên cột chứa số đếm
+
+
+def _detect_external_link_cols() -> tuple[str | None, str | None, str | None]:
+    """
+    Lấy 1 row bất kỳ từ external_link để đọc tên cột thật.
+    Trả về (ip_col, date_col, count_col).
+    """
+    global _IP_COL, _DATE_COL, _CNT_COL
+    if _IP_COL:
+        return _IP_COL, _DATE_COL, _CNT_COL
+
+    try:
+        r = httpx.get(_url("external_link"), headers=HEADERS,
+                      params={"limit": "1"}, timeout=10)
+        if not r.is_success:
+            log.error(f"[DETECT_COLS] {r.status_code}: {r.text[:200]}")
+            return None, None, None
+
+        rows = r.json()
+        if not rows:
+            # Bảng trống → lấy từ header PostgREST (Content-Range)
+            log.warning("[DETECT_COLS] bảng external_link rỗng, không detect được cột")
+            return None, None, None
+
+        keys = list(rows[0].keys())
+        log.info(f"[DETECT_COLS] tên cột thật: {keys}")
+
+        # Tìm cột IP: chứa 'ip' không phân biệt hoa thường
+        ip_col = next((k for k in keys if k.lower() == "ip"), None)
+        # Tìm cột date: chứa 'date'
+        date_col = next((k for k in keys
+                         if "date" in k.lower() and k.lower() != "id"), None)
+        # Tìm cột count: chứa 'number' hoặc 'count'
+        cnt_col = next((k for k in keys
+                        if "number" in k.lower() or "count" in k.lower()), None)
+
+        log.info(f"[DETECT_COLS] ip={ip_col!r} date={date_col!r} count={cnt_col!r}")
+
+        _IP_COL   = ip_col
+        _DATE_COL = date_col
+        _CNT_COL  = cnt_col
+        return ip_col, date_col, cnt_col
+
+    except Exception as e:
+        log.error(f"[DETECT_COLS] exception: {e}")
+        return None, None, None
+
 
 def check_and_inc_ip_limit(ip: str) -> tuple[bool, int]:
     """
-    Tracking số lần vượt link theo IP + ngày.
-    Dùng bảng ip_limit riêng (tạo trong Supabase):
-        id                  uuid default gen_random_uuid()
-        ip                  text
-        date_check          text   (YYYY-MM-DD)
-        count               int8   default 0
+    Kiểm tra và tăng bộ đếm vượt link theo IP + ngày.
+    Tự detect tên cột từ bảng external_link.
 
-    Nếu muốn dùng bảng external_link thì đọc comment bên dưới.
+    Trả về:
+        (True,  count)  → còn trong giới hạn
+        (False, count)  → đã hết lượt hôm nay
     """
     today = vn_today_str()
 
-    # ── DEBUG: lấy toàn bộ bảng để xem cấu trúc thực tế ─────────────────────
-    try:
-        r_debug = httpx.get(
-            _url("external_link"),
-            headers=HEADERS,
-            params={"limit": "1"},
-            timeout=10,
-        )
-        log.info(f"[IP_LIMIT DEBUG] status={r_debug.status_code} body={r_debug.text[:300]}")
-    except Exception as e:
-        log.error(f"[IP_LIMIT DEBUG] error: {e}")
-    # ─────────────────────────────────────────────────────────────────────────
+    # ── Bước 1: detect tên cột ───────────────────────────────────────────────
+    ip_col, date_col, cnt_col = _detect_external_link_cols()
 
-    # Lấy tất cả row của IP này (không filter date, tránh lỗi 400)
+    if not ip_col or not date_col or not cnt_col:
+        log.warning("[IP_LIMIT] không detect được cột → bỏ qua giới hạn")
+        return True, 0
+
+    # ── Bước 2: lấy tất cả row của IP này ───────────────────────────────────
     try:
         r = httpx.get(
             _url("external_link"),
-            headers={**HEADERS, "Prefer": "return=representation"},
-            params={"ip": f"eq.{ip}"},
+            headers=HEADERS,
+            params={ip_col: f"eq.{ip}"},
             timeout=10,
         )
-        log.info(f"[IP_LIMIT] ip filter status={r.status_code} body={r.text[:200]}")
+        log.info(f"[IP_LIMIT] query status={r.status_code}")
 
         if not r.is_success:
-            log.error(f"[IP_LIMIT] 400 detail: {r.text}")
-            return True, 0  # lỗi → cho qua
+            log.error(f"[IP_LIMIT] lỗi query: {r.text[:200]}")
+            return True, 0
 
         rows = r.json()
 
     except Exception as e:
-        log.error(f"check_and_inc_ip_limit error: {e}")
+        log.error(f"[IP_LIMIT] exception: {e}")
         return True, 0
 
-    # Tìm row của IP này có date = hôm nay
+    # ── Bước 3: tìm row hôm nay ─────────────────────────────────────────────
     today_row = None
     for row in rows:
-        d = str(row.get("date_external_link") or row.get("date") or "")
-        # So sánh linh hoạt: "2026-03-20" có trong "2026-03-20T00:00:00..."
+        d = str(row.get(date_col) or "")
         if today in d:
             today_row = row
             break
 
+    # ── Bước 4: xử lý ───────────────────────────────────────────────────────
     if today_row:
         row_id  = today_row.get("id")
-        current = today_row.get("number_external_date") or 0
+        current = today_row.get(cnt_col) or 0
 
         if current >= MAX_EXTERNAL_PER_DAY:
+            log.info(f"[IP_LIMIT] {ip} đã hết lượt ({current}/{MAX_EXTERNAL_PER_DAY})")
             return False, current
 
         new_count = current + 1
@@ -156,36 +200,39 @@ def check_and_inc_ip_limit(ip: str) -> tuple[bool, int]:
                 _url("external_link"),
                 headers=HEADERS,
                 params={"id": f"eq.{row_id}"},
-                json={"number_external_date": new_count},
+                json={
+                    cnt_col:  new_count,
+                    date_col: today,
+                },
                 timeout=10,
             )
+            log.info(f"[IP_LIMIT] {ip} cập nhật count={new_count}")
         except Exception as e:
-            log.error(f"check_and_inc_ip_limit patch error: {e}")
+            log.error(f"[IP_LIMIT] patch error: {e}")
 
         return True, new_count
 
     else:
-        # Chưa có row cho IP này hôm nay → INSERT
+        # Chưa có record hôm nay → INSERT mới
+        insert_data = {
+            ip_col:   ip,
+            date_col: today,
+            cnt_col:  1,
+            "use":    False,
+            "url_shorten_key": "__ip_track__",
+        }
         try:
-            insert_data = {
-                "ip":                   ip,
-                "date_external_link":   today,
-                "number_external_date": 1,
-                "use":                  False,
-                "url_shorten_key":      "__ip_track__",
-            }
             ri = httpx.post(
                 _url("external_link"),
                 headers=HEADERS,
                 json=insert_data,
                 timeout=10,
             )
-            log.info(f"[IP_LIMIT] insert status={ri.status_code} body={ri.text[:200]}")
+            log.info(f"[IP_LIMIT] INSERT status={ri.status_code} body={ri.text[:150]}")
         except Exception as e:
-            log.error(f"check_and_inc_ip_limit insert error: {e}")
+            log.error(f"[IP_LIMIT] insert error: {e}")
 
         return True, 1
-
 def _url(table: str) -> str:
     return f"{SUPABASE_URL}/rest/v1/{table}"
 
