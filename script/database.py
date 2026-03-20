@@ -85,56 +85,85 @@ def get_referral_stats(user_id: str) -> dict:
         "earned": count * REFERRAL_REWARD_INVITER,
     }
 
-# ── EXTERNAL LINK · IP RATE LIMIT ───────────────────────────────────────────
-# Bảng external_link cần có các cột:
-#   ip                  TEXT
-#   date                TEXT  (YYYY-MM-DD)
-#   number_external_date INTEGER  (số lần vượt link trong ngày)
-#
-# Thêm đoạn này vào cuối file database.py của bạn
-# ─────────────────────────────────────────────────────────────────────────────
+"""
+PATCH cho database.py
+─────────────────────
+Thay thế hoàn toàn hàm check_and_inc_ip_limit cũ bằng hàm dưới đây.
 
-MAX_EXTERNAL_PER_DAY = 2   # giới hạn số lần vượt link mỗi IP mỗi ngày
+Schema bảng external_link (theo ảnh Supabase):
+  id                   uuid (PK)
+  use                  bool
+  url_shorten_key      text
+  username             text
+  ip                   text       ← cột lưu IP
+  date_external_link   date       ← cột kiểu DATE (YYYY-MM-DD)
+  number_external_date int8       ← đếm số lần vượt link trong ngày
+"""
+
+MAX_EXTERNAL_PER_DAY = 2  # giới hạn số lần / IP / ngày
+
 
 def check_and_inc_ip_limit(ip: str) -> tuple[bool, int]:
     """
-    Kiểm tra và tăng bộ đếm vượt link theo IP + ngày.
+    Tìm record trong bảng external_link có ip = <ip> VÀ date_external_link = hôm nay.
+    - Nếu chưa có record nào cho IP này hôm nay:
+        → Tìm 1 row có ip IS NULL để "ghi nhận" IP vào đó (update),
+          hoặc nếu không có row trống thì chỉ đếm trong bộ nhớ (fallback).
+        → Thực tế: ta lưu tracking IP vào một row riêng bằng cách
+          UPDATE row có ip = ip này hoặc INSERT nếu Supabase cho phép.
+
+    *** CÁCH ĐƠN GIẢN NHẤT PHÙ HỢP VỚI SCHEMA HIỆN TẠI ***
+    Dùng 1 row đặc biệt (use=FALSE, url_shorten_key='__ip_track__') để tracking.
+    Mỗi IP có 1 row riêng. Nếu chưa có thì INSERT, nếu có thì UPDATE counter.
 
     Trả về:
-        (True,  số_lần_hiện_tại)  → IP còn trong giới hạn, đã tăng counter
-        (False, số_lần_hiện_tại)  → IP đã đạt / vượt giới hạn, KHÔNG tăng
+        (True,  count)  → còn trong giới hạn, đã tăng counter
+        (False, count)  → đã đạt giới hạn
     """
-    today = vn_today_str()
+    today = vn_today_str()  # hàm này đã có sẵn trong database.py
 
-    # Tìm record IP hôm nay
     try:
-        params = {"ip": f"eq.{ip}", "date_external_link": f"eq.{today}"}
-        r = httpx.get(_url("external_link"), headers=HEADERS, params=params, timeout=10)
+        # ── Bước 1: Tìm row tracking cho IP này ──────────────────────────────
+        r = httpx.get(
+            _url("external_link"),
+            headers=HEADERS,
+            params={
+                "ip":                 f"eq.{ip}",
+                "url_shorten_key":    "eq.__ip_track__",
+            },
+            timeout=10,
+        )
         r.raise_for_status()
         rows = r.json()
+
     except Exception as e:
         log.error(f"check_and_inc_ip_limit select error: {e}")
-        # Lỗi mạng → cho qua để không block user oan
-        return True, 0
+        return True, 0  # lỗi mạng → cho qua
 
     if rows:
-        # Đã có record hôm nay
-        row     = rows[0]
-        row_id  = row.get("id")
-        current = row.get("number_external_date") or 0
+        row         = rows[0]
+        row_id      = row.get("id")
+        last_date   = str(row.get("date_external_link") or "")
+        current     = row.get("number_external_date") or 0
+
+        # Nếu ngày khác → reset counter về 0
+        if last_date != today:
+            current = 0
 
         if current >= MAX_EXTERNAL_PER_DAY:
-            # Đã đạt giới hạn → không cho qua
-            return False, current
+            return False, current  # đã hết lượt
 
-        # Còn trong giới hạn → tăng counter
+        # Tăng counter + cập nhật ngày
         new_count = current + 1
         try:
             httpx.patch(
                 _url("external_link"),
                 headers=HEADERS,
                 params={"id": f"eq.{row_id}"},
-                json={"number_external_date": new_count},
+                json={
+                    "number_external_date": new_count,
+                    "date_external_link":   today,   # luôn cập nhật ngày
+                },
                 timeout=10,
             )
         except Exception as e:
@@ -143,12 +172,18 @@ def check_and_inc_ip_limit(ip: str) -> tuple[bool, int]:
         return True, new_count
 
     else:
-        # Chưa có record → tạo mới (lần đầu tiên hôm nay)
+        # ── Chưa có row tracking → INSERT mới ────────────────────────────────
         try:
             httpx.post(
                 _url("external_link"),
                 headers=HEADERS,
-                json={"ip": ip, "date_external_link": today, "number_external_date": 1},
+                json={
+                    "ip":                   ip,
+                    "url_shorten_key":      "__ip_track__",
+                    "use":                  False,
+                    "date_external_link":   today,
+                    "number_external_date": 1,
+                },
                 timeout=10,
             )
         except Exception as e:
