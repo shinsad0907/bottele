@@ -50,7 +50,7 @@ from script.database import (
     admin_add_coins, admin_set_package,
     claim_slot, release_slot, get_active_slots,
 )
-from translations import (
+from script.translations import (
     t, lang_keyboard, get_lang_name,
     LANGUAGES, DEFAULT_LANG,
 )
