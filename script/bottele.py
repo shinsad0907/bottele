@@ -1238,7 +1238,3 @@ def setup_application() -> Application:
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, on_message))
 
     return app
-
-
-if __name__ == "__main__":
-    setup_application().run_polling(drop_pending_updates=True)
