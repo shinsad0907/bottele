@@ -1,1240 +1,1578 @@
-# bottele.py  –  ClothesBot  (i18n refactor, aligned with database.py)
-# Place this file at: script/bottele.py
-# Language: English default, 100+ languages via translations.py
-#
-# DB table: manager_user
-#   Columns: id_user, username, coin, number_create_image, number_create_video,
-#            proxy, waiting, package, roll_call, roll_call_date,
-#            referral_count, referred_by
-#   NOTE: 'language' column must be added:
-#         ALTER TABLE manager_user ADD COLUMN language VARCHAR DEFAULT 'en';
-#
-# DB functions used (from database.py):
-#   get_user(user_id)                      → dict | None
-#   get_or_create_user(user_id, username)  → dict
-#   update_user_field(user_id, fields)     → None   (fields = dict!)
-#   add_coins(user_id, amount)             → int
-#   spend_coins(user_id, amount)           → (bool, int)
-#   inc_image_count(user_id)
-#   inc_video_count(user_id)
-#   do_rollcall(user_id)                   → (bool, new_coin, reward)
-#   apply_referral(new_uid, inviter_uid)   → (bool, inv_coin, invitee_coin)
-#   get_referral_stats(user_id)            → {"count": int, "earned": int}
-#   get_user_by_username(username)         → dict | None
-#   admin_add_coins(username, amount)      → (bool, int)
-#   admin_set_package(username, package)   → bool
-#   claim_slot(user_id)                    → bool
-#   release_slot(user_id)
-#   get_active_slots()                     → int
-
-import asyncio
-import logging
-import os
-import sys
-import time
-
-# ── Path fix (for Vercel / script/ subdirectory context) ─────────────────────
-# This file lives at script/bottele.py. Root dir must be in sys.path
-# so that `translations` (at root) can be imported.
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-# ─────────────────────────────────────────────────────────────────────────────
-
-from telegram import (
-    Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup,
-)
-from telegram.constants import ParseMode
+import os, logging, uuid, random, string, asyncio, time
+import requests, re, json, base64
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters,
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes
 )
 
-from .database import (
-    get_user, get_or_create_user, update_user_field,
-    add_coins, spend_coins,
-    inc_image_count, inc_video_count,
-    do_rollcall,
-    apply_referral, get_referral_stats,
-    get_user_by_username,
-    admin_add_coins, admin_set_package,
-    claim_slot, release_slot, get_active_slots,
+from script.database import (
+    get_or_create_user, get_user, update_user_field,
+    add_coins as db_add_coins, spend_coins as db_spend_coins,
+    inc_image_count, inc_video_count, inc_proxy,
+    set_package, record_payment,
+    do_rollcall, ROLLCALL_REWARD, ROLLCALL_BY_PKG,
+    admin_add_coins, admin_set_package, get_user_by_username,
+    apply_referral, get_referral_stats,           # ← thêm 2 cái này
+    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_INVITEE,  # ← và 2 constant
 )
-from translations import (
-    t, lang_keyboard, get_lang_name,
-    LANGUAGES, DEFAULT_LANG,
+from script.queue_manager  import enter_queue, leave_queue
+from script.payment_handler import (
+    handle_payment_callback,
+    handle_payment_photo,
+    kb_payment_menu, msg_payment_menu,
+    msg_pending_confirm, kb_after_pay_confirm,
+    COIN_MAP, VIP_MAP,
 )
+from script.create_key import KeyManager
 
-# ── Config ────────────────────────────────────────────────────────────────────
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8505349957:AAECbVyageqjiFttrODr0eHHcERkah-4MMU")
+
+log = logging.getLogger(__name__)
+logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
+
 WEB_BASE_URL  = os.environ.get("WEB_BASE_URL", "https://bottele-lilac.vercel.app").rstrip("/")
+COST_IMAGE    = 60
+COST_VIDEO    = 35
 
-CHANNEL_ID   = os.getenv("CHANNEL_ID", "@ClothessAI")
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/ClothessAI")
-ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
-BYPASS_LINK      = os.getenv("BYPASS_LINK", "https://bottele-lilac.vercel.app/getkey")
-REFERRAL_BOT_URL = os.getenv("REFERRAL_BOT_URL", "https://t.me/clothessAI_bot?start=")
+REQUIRED_CHANNEL     = "@ClothessAI"
+REQUIRED_CHANNEL_URL = "https://t.me/ClothessAI"
 
-COST_IMAGE = int(os.getenv("COST_IMAGE", "20"))
-COST_VIDEO = int(os.getenv("COST_VIDEO", "30"))
-MAX_SLOTS  = int(os.getenv("MAX_SLOTS",  "5"))
+# Admin duy nhất
+ADMIN_USERNAME = "shadowbotnet99"   # không có @
 
-PACKAGE_LABELS = {
-    "free":    "🆓 FREE",
-    "vip":     "👑 VIP",
-    "vip_pro": "💎 VIP PRO",
-}
-# xu điểm danh (mirror từ database.py ROLLCALL_BY_PKG)
-ROLLCALL_BY_PKG = {
-    "free":    300,
-    "vip":     1500,
-    "vip_pro": 5000,
-}
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Helpers
-# ══════════════════════════════════════════════════════════════════════════════
-
-def get_user_lang(user_id: int | str) -> str:
-    """Read 'language' field from DB. Falls back to DEFAULT_LANG."""
+# ══════════════════════════════════════════════
+#  CHANNEL GATE
+# ══════════════════════════════════════════════
+async def check_join(bot_instance, user_id: int) -> bool:
     try:
-        u = get_user(str(user_id))
-        return (u.get("language") or DEFAULT_LANG) if u else DEFAULT_LANG
-    except Exception:
-        return DEFAULT_LANG
-
-
-def pkg_label(pkg: str) -> str:
-    return PACKAGE_LABELS.get(pkg, pkg)
-
-
-def badge_for(coins: int) -> str:
-    if coins >= 50000: return "💎 Diamond"
-    if coins >= 20000: return "🥇 Gold"
-    if coins >= 5000:  return "🥈 Silver"
-    return "🥉 Bronze"
-
-
-async def check_channel_membership(bot: Bot, uid: int) -> bool:
-    try:
-        m = await bot.get_chat_member(CHANNEL_ID, uid)
-        return m.status not in ("left", "kicked")
-    except Exception:
+        member = await bot_instance.get_chat_member(REQUIRED_CHANNEL, user_id)
+        return member.status in ("member", "administrator", "creator")
+    except Exception as e:
+        log.warning(f"check_join error: {e}")
         return False
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Keyboards
-# ══════════════════════════════════════════════════════════════════════════════
-
-def kb_main(u: dict, lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
-    pkg    = u.get("package", "free")
-    reward = ROLLCALL_BY_PKG.get(pkg, 0)
-    done   = bool(u.get("roll_call", False))
-
-    if pkg == "free":
-        rc_btn = InlineKeyboardButton(
-            t("btn_rollcall_upgrade", lang), callback_data="rollcall"
-        )
-    elif done:
-        rc_btn = InlineKeyboardButton(
-            t("btn_rollcall_done", lang), callback_data="rollcall"
-        )   
-    else:
-        rc_btn = InlineKeyboardButton(
-            t("btn_rollcall_ready", lang, reward=reward), callback_data="rollcall"
-        )
-
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t("btn_create_image", lang), callback_data="create_image")],
-        [InlineKeyboardButton(t("btn_create_video", lang), callback_data="create_video")],
-        [
-            InlineKeyboardButton(t("btn_wallet",    lang), callback_data="wallet"),
-            InlineKeyboardButton(t("btn_buy_coins", lang), callback_data="buy_coins"),
-        ],
-        [
-            InlineKeyboardButton(t("btn_external_link", lang), callback_data="external_link"),
-            InlineKeyboardButton(t("btn_referral",      lang), callback_data="referral"),
-        ],
-        [
-            InlineKeyboardButton(t("btn_stats",    lang), callback_data="stats"),
-            InlineKeyboardButton(t("btn_help",     lang), callback_data="help"),
-        ],
-        # ── Tách thành 2 hàng riêng ──────────────────────────
-        [InlineKeyboardButton(t("btn_language", lang), callback_data="language")],
-        [rc_btn],
-    ])
-
-def kb_back(lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(t("btn_back", lang), callback_data="home")
-    ]])
-
-
-def kb_cancel(lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(t("btn_cancel", lang), callback_data="home")
-    ]])
-
-
-def kb_after_image(lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t("btn_make_video", lang), callback_data="video_from_last")],
-        [
-            InlineKeyboardButton(t("btn_new_image", lang), callback_data="create_image"),
-            InlineKeyboardButton(t("btn_home",      lang), callback_data="home"),
-        ],
-    ])
-
-
-def kb_after_video(coins: int, lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t("btn_coins_left", lang, coins=coins), callback_data="wallet")],
-        [
-            InlineKeyboardButton(t("btn_new_video", lang), callback_data="create_video"),
-            InlineKeyboardButton(t("btn_home",      lang), callback_data="home"),
-        ],
-    ])
-
-
-def kb_prompt_selector(lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
-    presets = [
-        ("👗 Dress",   "wear a beautiful dress, elegant"),
-        ("👔 Suit",    "wearing a professional suit"),
-        ("👙 Beach",   "wearing a swimsuit, beach"),
-        ("🎌 Anime",   "anime style outfit, colorful"),
-        ("🧥 Casual",  "casual outfit, modern streetwear"),
-        ("✏️ Custom",  "CUSTOM"),
-    ]
-    rows = [[InlineKeyboardButton(label, callback_data=f"preset_{val}")] for label, val in presets]
-    rows.append([InlineKeyboardButton(t("btn_cancel", lang), callback_data="home")])
-    return InlineKeyboardMarkup(rows)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Home / Splash screens
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _build_home_text(u: dict, lang: str) -> str:
-    coins  = u.get("coin", 0)
-    images = u.get("number_create_image", 0)
-    videos = u.get("number_create_video", 0)
-    pkg    = u.get("package", "free")
-    name   = u.get("username", "User") or "User"
-    reward = ROLLCALL_BY_PKG.get(pkg, 0)
-    done   = bool(u.get("roll_call", False))
-
-    if pkg == "free":
-        hint = t("splash_rc_free", lang)
-    elif done:
-        hint = t("splash_rc_done", lang)
-    else:
-        hint = t("splash_rc_pending", lang, reward=reward)
-
-    return "\n".join([
-        t("splash_greeting",   lang, name=name),
-        "",
-        t("splash_account",    lang),
-        t("splash_coins",      lang, coins=coins),
-        t("splash_images",     lang, images=images),
-        t("splash_videos",     lang, videos=videos),
-        "└──────────────────────────┘",
-        "",
-        t("splash_cost_image", lang, cost=COST_IMAGE),
-        t("splash_cost_video", lang, cost=COST_VIDEO),
-        "",
-        t("splash_earn_hint",  lang),
-        "",
-        t("splash_choose",     lang),
-        "",
-        hint,
-    ])
-
-
-async def animated_splash(bot: Bot, chat_id: int, u: dict, lang: str = DEFAULT_LANG):
-    """Animated line-by-line reveal of the home screen."""
-    coins  = u.get("coin", 0)
-    images = u.get("number_create_image", 0)
-    videos = u.get("number_create_video", 0)
-    pkg    = u.get("package", "free")
-    name   = u.get("username", "User") or "User"
-    reward = ROLLCALL_BY_PKG.get(pkg, 0)
-    done   = bool(u.get("roll_call", False))
-
-    lines = [
-        t("splash_greeting",   lang, name=name), "",
-        t("splash_account",    lang),
-        t("splash_coins",      lang, coins=coins),
-        t("splash_images",     lang, images=images),
-        t("splash_videos",     lang, videos=videos),
-        "└──────────────────────────┘", "",
-        t("splash_cost_image", lang, cost=COST_IMAGE),
-        t("splash_cost_video", lang, cost=COST_VIDEO), "",
-        t("splash_earn_hint",  lang), "",
-        t("splash_choose",     lang),
-    ]
-
-    msg = await bot.send_message(
-        chat_id, "⏳ Loading\\.\\.\\.",
-        parse_mode=ParseMode.MARKDOWN_V2,
+async def send_join_prompt(reply_fn):
+    text = (
+        "```\n╔══════════════════════════════════════╗\n"
+        "║  🔒  CLOTHESBOT  ·  YÊU CẦU  🔒     ║\n"
+        "╚══════════════════════════════════════╝\n```\n\n"
+        "⚠️ *BẠN CHƯA THAM GIA CHANNEL\\!*\n\n"
+        "1️⃣ Bấm nút bên dưới\n2️⃣ Join channel\n3️⃣ Quay lại bấm /start"
     )
-    for i in range(1, len(lines) + 1):
-        await asyncio.sleep(0.07)
-        try:
-            await msg.edit_text("\n".join(lines[:i]), parse_mode=ParseMode.MARKDOWN_V2)
-        except Exception:
-            pass
-
-    if pkg == "free":
-        hint = t("splash_rc_free", lang)
-    elif done:
-        hint = t("splash_rc_done", lang)
-    else:
-        hint = t("splash_rc_pending", lang, reward=reward)
-
-    final_text = "\n".join(lines) + f"\n\n{hint}"
-    await msg.edit_text(
-        final_text,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=kb_main(u, lang),
-    )
-
-
-async def splash_final(bot: Bot, chat_id: int, u: dict, lang: str = DEFAULT_LANG):
-    """Quick (non-animated) home screen."""
-    await bot.send_message(
-        chat_id,
-        _build_home_text(u, lang),
-        parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=kb_main(u, lang),
-    )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Info screens
-# ══════════════════════════════════════════════════════════════════════════════
-
-async def msg_balance(bot: Bot, chat_id: int, u: dict, lang: str = DEFAULT_LANG):
-    coins  = u.get("coin", 0)
-    images = u.get("number_create_image", 0)
-    videos = u.get("number_create_video", 0)
-    spent  = images * COST_IMAGE + videos * COST_VIDEO   # estimate
-    name   = u.get("username", "User") or "User"
-    uid    = u.get("id_user", "?")
-
-    text = "\n".join([
-        t("balance_title",   lang),    "",
-        t("balance_name",    lang, name=name),
-        t("balance_id",      lang, uid=uid),    "",
-        t("balance_header",  lang),
-        t("balance_coins",   lang, coins=coins),
-        "└──────────────────────────┘",    "",
-        t("balance_history", lang),
-        t("balance_images",  lang, images=images),
-        t("balance_videos",  lang, videos=videos),
-        t("balance_spent",   lang, spent=spent),
-        "└──────────────────────────┘",
-    ])
-    await bot.send_message(
-        chat_id, text,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=kb_back(lang),
-    )
-
-
-async def msg_stats(bot: Bot, chat_id: int, u: dict, lang: str = DEFAULT_LANG):
-    coins  = u.get("coin", 0)
-    images = u.get("number_create_image", 0)
-    videos = u.get("number_create_video", 0)
-    spent  = images * COST_IMAGE + videos * COST_VIDEO
-    pkg    = u.get("package", "free")
-    uid    = u.get("id_user", "?")
-
-    text = "\n".join([
-        t("stats_title",        lang),    "",
-        t("stats_id",           lang, uid=uid),
-        t("stats_rank",         lang, badge=badge_for(coins), pkg=pkg_label(pkg)),    "",
-        t("stats_coins_header", lang),
-        t("stats_current",      lang, coins=coins),
-        t("stats_spent",        lang, spent=spent),
-        "└──────────────────────────┘",    "",
-        t("stats_activity",     lang),
-        t("stats_images",       lang, images=images),
-        t("stats_videos",       lang, videos=videos),
-        "└──────────────────────────┘",
-    ])
-    await bot.send_message(
-        chat_id, text,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=kb_back(lang),
-    )
-
-
-async def msg_help(bot: Bot, chat_id: int, lang: str = DEFAULT_LANG):
-    text = "\n".join([
-        t("help_title",          lang), "",
-        t("help_image_title",    lang, cost=COST_IMAGE),
-        t("help_image_steps",    lang), "",
-        t("help_video_title",    lang, cost=COST_VIDEO),
-        t("help_video_steps",    lang), "",
-        t("help_checkin_title",  lang),
-        t("help_checkin_free",   lang),
-        t("help_checkin_vip",    lang),
-        t("help_checkin_vippro", lang),
-        t("help_checkin_reset",  lang), "",
-        t("help_coins_title",    lang),
-        t("help_coins_1",        lang),
-        t("help_coins_2",        lang),
-        t("help_coins_3",        lang),
-        t("help_coins_4",        lang), "",
-        t("help_vip_title",      lang),
-        t("help_vip_steps",      lang),
-    ])
-    await bot.send_message(
-        chat_id, text,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=kb_back(lang),
-    )
-
-
-async def send_join_prompt(bot: Bot, chat_id: int, lang: str = DEFAULT_LANG):
-    text = "\n".join([
-        t("join_title",   lang), "",
-        t("join_warning", lang), "",
-        t("join_step1",   lang),
-        t("join_step2",   lang),
-        t("join_step3",   lang),
-    ])
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(t("btn_join_channel", lang), url=CHANNEL_LINK)],
-        [InlineKeyboardButton(t("btn_joined",       lang), callback_data="check_join")],
+        [InlineKeyboardButton("👗 Tham Gia Channel Ngay!", url=REQUIRED_CHANNEL_URL)],
+        [InlineKeyboardButton("✅ Đã Join → Bắt Đầu",     callback_data="check_join")],
     ])
-    await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb)
+    await reply_fn(text, reply_markup=kb, parse_mode="MarkdownV2")
 
+# ══════════════════════════════════════════════
+#  FIREBASE / IMAGE / VIDEO APIs
+# ══════════════════════════════════════════════
+FIREBASE_KEY = "AIzaSyDkChmbBT5DiK0HNTA8Ffx8NJq7reWkS6I"
+TEMP_DOMAINS = ["getmule.com", "fivemail.com", "vomoto.com", "mailnull.com"]
+FIREBASE_HDR = {
+    'accept': '*/*', 'content-type': 'application/json',
+    'origin': 'https://undresswith.ai',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'x-browser-channel': 'stable',
+    'x-browser-copyright': 'Copyright 2026 Google LLC. All Rights reserved.',
+    'x-browser-validation': 'aSLd2f09Ia/YwdnAvb1HwCexgog=',
+    'x-browser-year': '2026',
+    'x-client-data': 'CI+2yQEIpLbJAQipncoBCOr9ygEIlKHLAQiFoM0B',
+    'x-client-version': 'Chrome/JsCore/11.0.1/FirebaseCore-web',
+    'x-firebase-gmpid': '1:453358396684:web:3d416bb1f03907914e1529',
+}
+API_HDR = {
+    'accept': '*/*', 'content-type': 'application/json',
+    'origin': 'https://undresswith.ai', 'referer': 'https://undresswith.ai/',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+}
+PIKA_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36")
+MAILTM  = "https://api.mail.tm"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Processing log helpers
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════
+#  RAM SESSION DB
+# ══════════════════════════════════════════════
+sessions_db: dict = {}
+keys_db:     dict = {}
 
-async def _edit_log(msg, lines: list[str]):
-    try:
-        await msg.edit_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN_V2)
-    except Exception:
-        pass
+def get_session(uid):
+    uid = str(uid)
+    if uid not in sessions_db:
+        sessions_db[uid] = {}
+    return sessions_db[uid]
 
+def clear_session(uid):
+    uid = str(uid)
+    preserved = {}
+    if uid in sessions_db:
+        for key in ("last_image_bytes", "last_image_name"):
+            if key in sessions_db[uid]:
+                preserved[key] = sessions_db[uid][key]
+    sessions_db[uid] = preserved
 
-async def _edit_video_log(msg, lines: list[str], elapsed: int):
-    try:
-        await msg.edit_text(
-            "\n".join(lines) + f"\n\n  ⏱️ Elapsed: {elapsed}s",
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
-    except Exception:
-        pass
+def full_clear_session(uid):
+    sessions_db[str(uid)] = {}
 
+# ══════════════════════════════════════════════
+#  UI HELPERS
+# ══════════════════════════════════════════════
+INIT_COINS = 100
 
-# ══════════════════════════════════════════════════════════════════════════════
-# /start
-# ══════════════════════════════════════════════════════════════════════════════
+IMG_ICONS = ["👗","✨","🎨","💫","🌀","⚡","🔮","🧵"]
+VID_ICONS = ["🎬","👗","✨","🌀","🎞️","💫","⚡","🎥"]
+SPINNER   = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+PROGRESS_BLOCKS = [
+    "░░░░░░░░░░","█░░░░░░░░░","██░░░░░░░░","███░░░░░░░",
+    "████░░░░░░","█████░░░░░","██████░░░░","███████░░░",
+    "████████░░","█████████░","██████████"
+]
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tg  = update.effective_user
-    uid = str(tg.id)
+def progress_bar(step, total=10):
+    idx = min(int(step/total*10), 10)
+    return f"{PROGRESS_BLOCKS[idx]} {int(step/total*100)}%"
 
-    # Channel check
-    if not await check_channel_membership(context.bot, tg.id):
-        lang = get_user_lang(uid)
-        await send_join_prompt(context.bot, tg.id, lang)
-        return
+def esc(text: str) -> str:
+    for ch in r'\_*[]()~`>#+-=|{}.!':
+        text = text.replace(ch, f'\\{ch}')
+    return text
 
-    # Load or create user
-    u = get_or_create_user(uid, tg.username or "")
+def coin_bar(coins, max_coins=500):
+    filled = min(int(coins/max_coins*10), 10)
+    return f"[{'█'*filled}{'░'*(10-filled)}]"
 
-    # Handle referral arg
-    if context.args:
-        arg = context.args[0]
-        if arg.startswith("ref_"):
-            inviter_id = arg[4:]
-            ok, inv_coins, invitee_coins = apply_referral(uid, inviter_id)
-            if ok:
-                lang_inv = get_user_lang(inviter_id)
-                inviter  = get_user(inviter_id)
-                await context.bot.send_message(
-                    int(inviter_id),
-                    "\n".join([
-                        t("ref_inviter_success", lang_inv),
-                        t("ref_inviter_newuser",  lang_inv, name=tg.full_name or tg.username or uid),
-                        t("ref_inviter_reward",   lang_inv, reward=500),
-                        t("ref_inviter_balance",  lang_inv, coins=inv_coins),
-                    ]),
-                    parse_mode=ParseMode.MARKDOWN_V2,
-                )
-                lang = get_user_lang(uid)
-                await context.bot.send_message(
-                    tg.id,
-                    "\n".join([
-                        t("ref_invitee_welcome", lang),
-                        t("ref_invitee_joined",  lang),
-                        t("ref_invitee_reward",  lang, reward=300),
-                        t("ref_invitee_added",   lang), "",
-                        t("ref_invitee_start",   lang),
-                    ]),
-                    parse_mode=ParseMode.MARKDOWN_V2,
-                )
-                # Reload user after coins were added
-                u = get_user(uid) or u
+def rank_badge(coins):
+    if coins >= 2000: return "👑 LEGEND"
+    if coins >= 1000: return "💎 DIAMOND"
+    if coins >= 500:  return "🥇 GOLD"
+    if coins >= 200:  return "🥈 SILVER"
+    return "🥉 BRONZE"
 
-    lang = get_user_lang(uid)
-    await animated_splash(context.bot, tg.id, u, lang)
+def pkg_badge(package: str) -> str:
+    return {"vip": "👑 VIP", "vip_pro": "💎 VIP PRO"}.get(package, "🆓 FREE")
 
+def render_log_step(step, total_steps, lines, eta="", tick=0):
+    bar  = progress_bar(step, total_steps)
+    icon = IMG_ICONS[tick % len(IMG_ICONS)]
+    spin = SPINNER[tick % len(SPINNER)]
+    body = "\n".join(lines[-12:])
+    eta_line = f"\n  {spin} ETA: {eta}" if eta else ""
+    return (f"```\n╔══ {icon} CLOTHESBOT · PROCESSING {icon} ══╗\n"
+            f"║  {bar}\n╠══════════════════════════════════════╣\n"
+            f"{body}\n╚══════════════════════════════════════╝{eta_line}\n```")
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Callback query handler
-# ══════════════════════════════════════════════════════════════════════════════
+def render_video_log(step, total_steps, lines, eta="", tick=0):
+    bar  = progress_bar(step, total_steps)
+    icon = VID_ICONS[tick % len(VID_ICONS)]
+    spin = SPINNER[tick % len(SPINNER)]
+    body = "\n".join(lines[-12:])
+    eta_line = f"\n  {spin} ETA: {eta}" if eta else ""
+    return (f"```\n╔══ {icon} CLOTHESBOT · RENDERING {icon} ══╗\n"
+            f"║  {bar}\n╠══════════════════════════════════════╣\n"
+            f"{body}\n╚══════════════════════════════════════╝{eta_line}\n```")
 
-async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q    = update.callback_query
-    await q.answer()
-    d    = q.data
-    uid  = str(q.from_user.id)
-    lang = get_user_lang(uid)
+BANNER_SUCCESS = "╔══════════════════════════════════════╗\n║  ✅  CLOTHESBOT  ·  SUCCESS  ✅     ║\n╠══════════════════════════════════════╣"
+BANNER_ERROR   = "╔══════════════════════════════════════╗\n║  ⚠️   CLOTHESBOT  ·  ERROR   ⚠️    ║\n╠══════════════════════════════════════╣"
+BANNER_WALLET  = "╔══════════════════════════════════════╗\n║  💎  CLOTHESBOT  ·  WALLET  💎      ║\n╠══════════════════════════════════════╣"
 
-    # ── Home ──────────────────────────────────────────────────────────────────
-    if d == "home":
-        u = get_user(uid)
-        if u:
-            await splash_final(context.bot, q.message.chat_id, u, lang)
-        return
+# ══════════════════════════════════════════════
+#  SPLASH
+# ══════════════════════════════════════════════
+SPLASH_F1 = """```
+╔══════════════════════════════════════╗
+║       [ ĐANG KHỞI ĐỘNG... ]          ║
+╚══════════════════════════════════════╝
+```"""
+SPLASH_F2 = """```
+╔══════════════════════════════════════╗
+║  ✨  C L O T H E S B O T  ✨        ║
+║  ▓▓▓▓▓▓▓░░░░░░░░░░░░░░  ⚡ LOADING  ║
+╚══════════════════════════════════════╝
+```"""
+SPLASH_F3 = """```
+╔══════════════════════════════════════╗
+║  ██████╗██╗      ██████╗ ████████╗  ║
+║ ██╔════╝██║     ██╔═══██╗╚══██╔══╝  ║
+║ ██║     ██║     ██║   ██║   ██║     ║
+║ ╚██████╗███████╗╚██████╔╝   ██║     ║
+║  ╚═════╝╚══════╝ ╚═════╝    ╚═╝     ║
+║   👗  H E S B O T  ·  STUDIO  👗   ║
+╚══════════════════════════════════════╝
+```"""
+PROMPT_PRESETS = [
+    ("Nude",   "completely nude,medium breasts. same framing as original image, do not crop, do not zoom, keep original composition, keep original body proportions"),
+    ("Micro Bikini",   "change clothes to micro bikini, extremely small bikini, minimal coverage, provocative. same framing as original image, do not crop, do not zoom, keep original composition, keep original body proportions"),
+    ("Bunny Suit",   "change clothes to bunny suit, playboy bunny, strapless, leotard, bow tie, cuffs, black fishnet stockings. same framing as original image, do not crop, do not zoom, keep original composition, keep original body proportions"),
+    ("Cumshot",   "The woman has some sparse semen on her face, mouth and body. This semen is freshly ejaculated and somewhat viscous. same framing as original image, do not crop, do not zoom, keep original composition, keep original body proportions"),
+    ("Cowgirl",   "The woman in the picture is in a riding position, sitting semi-sitting or slightly leaning forward, straddling the supine man. Her legs are open, and the man's penis is fully inserted into her vagina; the base of his penis and testicles are clearly visible, and the woman's vagina is visibly stretched open by the large penis. The woman's appearance and physical characteristics should not be altered."),
+    ("Fingering",   "legs spread open and her vagina exposed,ass visible through thighs, anus, squatting, hand placed on pubis, fingering pussy, showing huge clit exposed. full body shot, entire body visible, head to toe, same framing as original image, do not crop, do not zoom, keep original composition, keep original body proportions"),
+    ("Kitchen",   "The scene was changed to a kitchen. The woman in the picture is sitting on the kitchen floor with her legs spread open, facing the camera, revealing her clearly visible labia majora and labia minora, the vagina is clearly visible."),
+    ("Living room",   "The scene was changed to a living room. The woman in the picture is sitting on the sofa with her legs spread open, facing the camera, revealing her clearly visible labia majora and labia minora, the vagina is clearly visible."),
+    ("In car",   "The scene was changed to a car. The woman in the picture is sitting in the car, facing the camera, revealing her clearly visible labia majora and labia minora, the vagina is clearly visible."),
+    ("Bedroom",   "The scene was changed to a bedroom. The woman in the picture is sitting on the bed, facing the camera, revealing her clearly visible labia majora and labia minora, the vagina is clearly visible."),
+    ("Office",   "The scene was changed to an office. The woman in the picture is sitting at her desk, facing the camera, revealing her clearly visible labia majora and labia minora, the vagina is clearly visible."),
+    ("✏️ Nhập prompt",   "__custom__"),
+]
+def splash_final(name, coins, total_images, total_videos=0, package="free", roll_called=False):
+    bar   = coin_bar(coins)
+    badge = rank_badge(coins)
+    pkg   = pkg_badge(package)
+    pkg_rc_reward = ROLLCALL_BY_PKG.get(package, 0)
 
-    # ── Channel join check ────────────────────────────────────────────────────
-    if d == "check_join":
-        if await check_channel_membership(context.bot, q.from_user.id):
-            u = get_or_create_user(uid, q.from_user.username or "")
-            await splash_final(context.bot, q.message.chat_id, u, lang)
-        else:
-            await q.answer(t("join_not_yet", lang), show_alert=True)
-        return
+    # FREE không có điểm danh
+    if package == "free":
+        rc_status = "🔗 Vượt link / 👥 Mời bạn để nhận xu"
+    else:
+        rc_status = "✅ Đã điểm danh hôm nay" if roll_called else f"🎁 Chưa điểm danh \\(\\+{pkg_rc_reward} xu\\)"
 
-    # ── Language picker ───────────────────────────────────────────────────────
-    if d == "language":
-        text = t("lang_title", lang) + "\n\n" + t("lang_subtitle", lang)
-        await context.bot.send_message(
-            q.message.chat_id, text,
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=lang_keyboard(lang),
-        )
-        return
-
-    if d.startswith("lang_set_"):
-        new_lang = d[len("lang_set_"):]
-        if new_lang in LANGUAGES:
-            update_user_field(uid, {"language": new_lang})   # ← dict!
-            lang = new_lang
-            u    = get_user(uid)
-            await q.answer(t("lang_changed", lang=lang, lang_name=get_lang_name(new_lang)))
-            if u:
-                await splash_final(context.bot, q.message.chat_id, u, lang)
-        return
-
-    # ── Wallet ────────────────────────────────────────────────────────────────
-    if d == "wallet":
-        u = get_user(uid)
-        if u:
-            await msg_balance(context.bot, q.message.chat_id, u, lang)
-        return
-
-    # ── Buy coins (placeholder) ───────────────────────────────────────────────
-    if d == "buy_coins":
-        await context.bot.send_message(
-            q.message.chat_id,
-            "💳 Contact admin to purchase coins or VIP\\.",
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_back(lang),
-        )
-        return
-
-    # ── Stats ─────────────────────────────────────────────────────────────────
-    if d == "stats":
-        u = get_user(uid)
-        if u:
-            await msg_stats(context.bot, q.message.chat_id, u, lang)
-        return
-
-    # ── Help ──────────────────────────────────────────────────────────────────
-    if d == "help":
-        await msg_help(context.bot, q.message.chat_id, lang)
-        return
-
-    # ── External link (bypass) ────────────────────────────────────────────────
-    if d == "external_link":
-        text = "\n".join([
-            t("key_title",  lang), "",
-            t("key_step1",  lang),
-            t("key_step2",  lang),
-            t("key_step3",  lang), "",
-            t("key_reward", lang),
-        ])
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(t("btn_get_key",    lang), url=BYPASS_LINK)],
-            [InlineKeyboardButton(t("btn_cancel_key", lang), callback_data="home")],
-        ])
-        await context.bot.send_message(
-            q.message.chat_id, text,
-            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb,
-        )
-        return
-
-    # ── Referral ──────────────────────────────────────────────────────────────
-    if d == "referral":
-        ref_link = f"{REFERRAL_BOT_URL}ref_{uid}"
-        stats    = get_referral_stats(uid)
-        count    = stats.get("count", 0)
-        earned   = stats.get("earned", 0)
-        text = "\n".join([
-            t("ref_title",         lang), "",
-            t("ref_your_link",     lang),
-            f"`{ref_link}`", "",
-            t("ref_reward_header", lang),
-            t("ref_reward_you",    lang, reward=500),
-            t("ref_reward_friend", lang, bonus=300),
-            "└──────────────────────────┘", "",
-            t("ref_stats_header",  lang),
-            t("ref_invited",       lang, count=count),
-            t("ref_earned",        lang, earned=earned),
-            "└──────────────────────────┘", "",
-            t("ref_how_title",     lang),
-            t("ref_how_steps",     lang, reward=500),
-        ])
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(
-                t("btn_share_link", lang),
-                url=f"https://t.me/share/url?url={ref_link}"
-            )],
-            [InlineKeyboardButton(t("btn_back", lang), callback_data="home")],
-        ])
-        await context.bot.send_message(
-            q.message.chat_id, text,
-            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb,
-        )
-        return
-
-    # ── Roll-call ─────────────────────────────────────────────────────────────
-    if d == "rollcall":
-        u   = get_user(uid)
-        pkg = (u or {}).get("package", "free")
-
-        if pkg == "free":
-            text = "\n".join([
-                t("rc_vip_only_title", lang), "",
-                t("rc_vip_only_free",  lang),
-                t("rc_vip_only_vip",   lang),
-                t("rc_vip_only_pro",   lang), "",
-                t("rc_free_hint",      lang), "",
-                t("rc_upgrade_hint",   lang),
-            ])
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(t("btn_upgrade_vip", lang), callback_data="buy_coins")],
-                [InlineKeyboardButton(t("btn_earn_link",   lang), callback_data="external_link")],
-                [InlineKeyboardButton(t("btn_invite",      lang), callback_data="referral")],
-                [InlineKeyboardButton(t("btn_back",        lang), callback_data="home")],
-            ])
-            await context.bot.send_message(
-                q.message.chat_id, text,
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb,
-            )
-            return
-
-        success, new_coin, reward = do_rollcall(uid)
-        if not success:
-            await q.answer(
-                t("rc_already", lang, reward=ROLLCALL_BY_PKG.get(pkg, 0)),
-                show_alert=True,
-            )
-            return
-
-        text = "\n".join([
-            t("rc_success_title",  lang), "",
-            t("rc_success_pkg",    lang, pkg=pkg_label(pkg)),
-            t("rc_success_reward", lang, reward=reward),
-            t("rc_success_bal",    lang, coins=new_coin), "",
-            t("rc_success_hint",   lang),
-        ])
-        await context.bot.send_message(
-            q.message.chat_id, text,
-            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_back(lang),
-        )
-        return
-
-    # ── Create image ──────────────────────────────────────────────────────────
-    if d == "create_image":
-        u     = get_user(uid)
-        coins = (u or {}).get("coin", 0)
-
-        if coins < COST_IMAGE:
-            text = "\n".join([
-                t("img_no_coins_title", lang), "",
-                t("img_no_coins_body",  lang, cost=COST_IMAGE, coins=coins,
-                  diff=COST_IMAGE - coins), "",
-                t("img_no_coins_hint",  lang),
-            ])
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(t("btn_upgrade_vip", lang), callback_data="buy_coins")],
-                [InlineKeyboardButton(t("btn_earn_link",   lang), callback_data="external_link")],
-                [InlineKeyboardButton(t("btn_back",        lang), callback_data="home")],
-            ])
-            await context.bot.send_message(
-                q.message.chat_id, text,
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb,
-            )
-            return
-
-        if get_active_slots() >= MAX_SLOTS:
-            await context.bot.send_message(
-                q.message.chat_id, t("queue_full", lang),
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_back(lang),
-            )
-            return
-
-        after = coins - COST_IMAGE
-        text = "\n".join([
-            t("img_start_title",   lang), "",
-            t("img_start_balance", lang, coins=coins, cost=COST_IMAGE, after=after), "",
-            t("img_start_step",    lang),
-        ])
-        context.user_data["state"] = "awaiting_image_photo"
-        await context.bot.send_message(
-            q.message.chat_id, text,
-            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_cancel(lang),
-        )
-        return
-
-    # ── Create video (standalone) ─────────────────────────────────────────────
-    if d == "create_video":
-        u     = get_user(uid)
-        coins = (u or {}).get("coin", 0)
-
-        if coins < COST_VIDEO:
-            text = "\n".join([
-                t("vid_no_coins_title", lang), "",
-                t("vid_no_coins_body",  lang, cost=COST_VIDEO, coins=coins), "",
-                t("vid_no_coins_hint",  lang),
-            ])
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(t("btn_upgrade_vip", lang), callback_data="buy_coins")],
-                [InlineKeyboardButton(t("btn_back",        lang), callback_data="home")],
-            ])
-            await context.bot.send_message(
-                q.message.chat_id, text,
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb,
-            )
-            return
-
-        after = coins - COST_VIDEO
-        text = "\n".join([
-            t("vid_start_title",   lang), "",
-            t("vid_start_balance", lang, coins=coins, cost=COST_VIDEO, after=after), "",
-            t("vid_start_step",    lang),
-        ])
-        context.user_data["state"] = "awaiting_video_photo"
-        await context.bot.send_message(
-            q.message.chat_id, text,
-            parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_cancel(lang),
-        )
-        return
-
-    # ── Create video from last image ──────────────────────────────────────────
-    if d == "video_from_last":
-        last_url = context.user_data.get("last_image_url")
-        if not last_url:
-            await context.bot.send_message(
-                q.message.chat_id, t("vid_no_last_image", lang),
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_back(lang),
-            )
-            return
-
-        u     = get_user(uid)
-        coins = (u or {}).get("coin", 0)
-        if coins < COST_VIDEO:
-            text = "\n".join([
-                t("vid_no_coins_title", lang), "",
-                t("vid_no_coins_body",  lang, cost=COST_VIDEO, coins=coins), "",
-                t("vid_no_coins_hint",  lang),
-            ])
-            await context.bot.send_message(
-                q.message.chat_id, text,
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_back(lang),
-            )
-            return
-
-        after = coins - COST_VIDEO
-        text = "\n".join([
-            t("vid_from_last_title",   lang), "",
-            t("vid_from_last_balance", lang, cost=COST_VIDEO, after=after), "",
-            t("vid_from_last_step",    lang),
-        ])
-        context.user_data["state"] = "awaiting_video_prompt_from_last"
-        await context.bot.send_message(
-            q.message.chat_id, text,
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(t("btn_cancel", lang), callback_data="home")
-            ]]),
-        )
-        return
-
-    # ── Preset prompt ─────────────────────────────────────────────────────────
-    if d.startswith("preset_"):
-        value = d[len("preset_"):]
-        photo_file_id = context.user_data.get("pending_photo_file_id")
-        if not photo_file_id:
-            await context.bot.send_message(
-                q.message.chat_id, t("preset_no_photo", lang),
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_back(lang),
-            )
-            return
-
-        if value == "CUSTOM":
-            text = "\n".join([
-                t("img_prompt_title", lang), "",
-                t("img_prompt_hint",  lang), "",
-                t("img_prompt_type",  lang),
-            ])
-            context.user_data["state"] = "awaiting_custom_prompt"
-            await context.bot.send_message(
-                q.message.chat_id, text,
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton(t("btn_cancel", lang), callback_data="home")
-                ]]),
-            )
-            return
-
-        await q.answer(t("preset_processing", lang))
-        await _do_image_generation(
-            context.bot, q.message.chat_id, uid, photo_file_id, value, context, lang
-        )
-        return
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Message handler
-# ══════════════════════════════════════════════════════════════════════════════
-
-async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tg    = update.effective_user
-    uid   = str(tg.id)
-    lang  = get_user_lang(uid)
-    state = context.user_data.get("state", "")
-    msg   = update.message
-
-    if not msg:
-        return
-
-    # ── Awaiting image photo ──────────────────────────────────────────────────
-    if state == "awaiting_image_photo":
-        if not msg.photo:
-            await msg.reply_text(t("img_no_photo", lang), parse_mode=ParseMode.MARKDOWN_V2)
-            return
-        file_id = msg.photo[-1].file_id
-        context.user_data["pending_photo_file_id"] = file_id
-        context.user_data["state"] = "awaiting_prompt"
-        text = "\n".join([
-            t("img_got_photo",    lang), "",
-            t("img_choose_style", lang),
-            t("img_choose_hint",  lang),
-        ])
-        await msg.reply_text(
-            text, parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_prompt_selector(lang),
-        )
-        return
-
-    # ── Awaiting video photo ──────────────────────────────────────────────────
-    if state == "awaiting_video_photo":
-        if not msg.photo:
-            await msg.reply_text(t("vid_no_photo", lang), parse_mode=ParseMode.MARKDOWN_V2)
-            return
-        file_id = msg.photo[-1].file_id
-        context.user_data["pending_video_photo_file_id"] = file_id
-        context.user_data["state"] = "awaiting_video_prompt"
-        text = "\n".join([
-            t("vid_got_photo",       lang), "",
-            t("vid_prompt_step",     lang), "",
-            t("vid_prompt_examples", lang),
-        ])
-        await msg.reply_text(
-            text, parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_cancel(lang),
-        )
-        return
-
-    # ── Custom image prompt ───────────────────────────────────────────────────
-    if state == "awaiting_custom_prompt":
-        if not msg.text:
-            return
-        prompt = msg.text.strip()
-        file_id = context.user_data.get("pending_photo_file_id")
-        if not file_id:
-            await msg.reply_text(t("img_no_photo", lang), parse_mode=ParseMode.MARKDOWN_V2)
-            return
-        context.user_data["state"] = ""
-        await _do_image_generation(
-            context.bot, msg.chat_id, uid, file_id, prompt, context, lang
-        )
-        return
-
-    # ── Video prompt ──────────────────────────────────────────────────────────
-    if state in ("awaiting_video_prompt", "awaiting_video_prompt_from_last"):
-        if not msg.text:
-            return
-        prompt = msg.text.strip()
-        context.user_data["state"] = ""
-
-        if state == "awaiting_video_prompt_from_last":
-            photo_url = context.user_data.get("last_image_url")
-            await _do_video_from_url(context.bot, msg.chat_id, uid, photo_url, prompt, context, lang)
-        else:
-            file_id = context.user_data.get("pending_video_photo_file_id")
-            if not file_id:
-                await msg.reply_text(t("vid_no_photo", lang), parse_mode=ParseMode.MARKDOWN_V2)
-                return
-            await _do_video_generation(context.bot, msg.chat_id, uid, file_id, prompt, context, lang)
-        return
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Image generation
-# ══════════════════════════════════════════════════════════════════════════════
-
-async def _do_image_generation(
-    bot: Bot, chat_id: int, uid: str,
-    file_id: str, prompt: str,
-    context: ContextTypes.DEFAULT_TYPE,
-    lang: str = DEFAULT_LANG,
-):
-    # Deduct coins using spend_coins (atomic check)
-    ok, remaining = spend_coins(uid, COST_IMAGE)
-    if not ok:
-        u = get_user(uid)
-        coins = (u or {}).get("coin", 0)
-        text = "\n".join([
-            t("img_no_coins_title", lang), "",
-            t("img_no_coins_body",  lang, cost=COST_IMAGE, coins=coins,
-              diff=COST_IMAGE - coins),
-        ])
-        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2,
-                               reply_markup=kb_back(lang))
-        return
-
-    if not claim_slot(uid):
-        # Refund
-        add_coins(uid, COST_IMAGE)
-        await bot.send_message(chat_id, t("queue_full", lang),
-                               parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_back(lang))
-        return
-
-    log_msg = await bot.send_message(
-        chat_id, t("queue_checking", lang), parse_mode=ParseMode.MARKDOWN_V2
+    return (
+        "```\n╔══════════════════════════════════════╗\n"
+        "║    ██████╗██╗      ██████╗ ████████╗ ║\n"
+        "║   ██╔════╝██║     ██╔═══██╗╚══██╔══╝ ║\n"
+        "║   ██║     ██║     ██║   ██║   ██║    ║\n"
+        "║   ╚██████╗███████╗╚██████╔╝   ██║    ║\n"
+        "║    ╚═════╝╚══════╝ ╚═════╝    ╚═╝    ║\n"
+        "║    👗  H E S B O T  ·  STUDIO  👗    ║\n"
+        "╚══════════════════════════════════════╝\n```\n\n"
+        f"👋 Xin chào, *{esc(name)}*\\!\n\n"
+        f"┌─ 📊 *THÔNG TIN TÀI KHOẢN* ──┐\n"
+        f"│  {badge}  ·  {pkg}\n"
+        f"│  💰 Xu: `{coins}` {coin_bar(coins)}\n"
+        f"│  🎨 Ảnh đã tạo:   `{total_images}`\n"
+        f"│  🎬 Video đã tạo: `{total_videos}`\n"
+        f"│  📅 {rc_status}\n"
+        f"└────────────────────────────────┘\n\n"
+        f"⚡ Chi phí tạo ảnh: `{COST_IMAGE} xu / lần`\n"
+        f"🎬 Chi phí tạo video: `{COST_VIDEO} xu / lần`\n"
+        f"🔗 Vượt link lấy xu \\| 👥 Mời bạn \\+500xu\n\n"
+        f"👇 *Chọn tính năng bên dưới:*"
     )
-    lines = [t("proc_starting", lang), t("proc_prompt", lang, prompt=prompt)]
-    await _edit_log(log_msg, lines)
-    await asyncio.sleep(1)
-
-    try:
-        file = await bot.get_file(file_id)
-        photo_url = file.file_path
-        lines.append(t("proc_photo_ready", lang))
-        await _edit_log(log_msg, lines)
-        await asyncio.sleep(1)
-
-        lines.append(t("proc_analyzing", lang))
-        await _edit_log(log_msg, lines)
-
-        # ── YOUR IMAGE API CALL HERE ──────────────────────────────────────────
-        # result_url = your_image_api(photo_url, prompt)
-        await asyncio.sleep(3)          # placeholder delay
-        result_url = photo_url          # placeholder result
-        # ─────────────────────────────────────────────────────────────────────
-
-        inc_image_count(uid)
-        u = get_user(uid)
-        new_coins = (u or {}).get("coin", 0)
-        context.user_data["last_image_url"] = result_url
-
-        await log_msg.delete()
-        caption = "\n".join([
-            t("img_result_title", lang), "",
-            t("img_result_ok",    lang, prompt=prompt, coins=new_coins), "",
-            t("img_result_hint",  lang),
-        ])
-        await bot.send_photo(
-            chat_id, result_url,
-            caption=caption, parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_after_image(lang),
-        )
-
-    except Exception as e:
-        logger.error(f"Image gen error: {e}")
-        add_coins(uid, COST_IMAGE)   # refund
-        text = "\n".join([
-            t("img_fail_title", lang), "",
-            t("img_fail_body",  lang, error=str(e), cost=COST_IMAGE),
-        ])
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton(t("btn_img_start", lang), callback_data="create_image"),
-            InlineKeyboardButton(t("btn_home",      lang), callback_data="home"),
-        ]])
-        await _edit_log(log_msg, [text])
-        try:
-            await log_msg.edit_reply_markup(reply_markup=kb)
-        except Exception:
-            pass
-    finally:
-        release_slot(uid)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Video generation
-# ══════════════════════════════════════════════════════════════════════════════
-
-async def _do_video_generation(
-    bot: Bot, chat_id: int, uid: str,
-    file_id: str, prompt: str,
-    context: ContextTypes.DEFAULT_TYPE,
-    lang: str = DEFAULT_LANG,
-):
-    try:
-        file = await bot.get_file(file_id)
-        photo_url = file.file_path
-    except Exception:
-        await bot.send_message(chat_id, t("vid_no_photo", lang),
-                               parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_back(lang))
-        return
-    await _do_video_from_url(bot, chat_id, uid, photo_url, prompt, context, lang)
-
-
-async def _do_video_from_url(
-    bot: Bot, chat_id: int, uid: str,
-    photo_url: str, prompt: str,
-    context: ContextTypes.DEFAULT_TYPE,
-    lang: str = DEFAULT_LANG,
-):
-    ok, remaining = spend_coins(uid, COST_VIDEO)
-    if not ok:
-        u = get_user(uid)
-        coins = (u or {}).get("coin", 0)
-        text = "\n".join([
-            t("vid_no_coins_title", lang), "",
-            t("vid_no_coins_body",  lang, cost=COST_VIDEO, coins=coins),
-        ])
-        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2,
-                               reply_markup=kb_back(lang))
-        return
-
-    if not claim_slot(uid):
-        add_coins(uid, COST_VIDEO)
-        await bot.send_message(chat_id, t("queue_full", lang),
-                               parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_back(lang))
-        return
-
-    log_msg = await bot.send_message(
-        chat_id, t("queue_checking", lang), parse_mode=ParseMode.MARKDOWN_V2
+def kb_prompt_selector():
+    """Keyboard chọn prompt nhanh cho tạo ảnh."""
+    rows = []
+    for i in range(0, len(PROMPT_PRESETS) - 1, 2):  # 2 nút mỗi hàng
+        row = []
+        row.append(InlineKeyboardButton(
+            PROMPT_PRESETS[i][0],
+            callback_data=f"prompt_pick_{i}"
+        ))
+        if i + 1 < len(PROMPT_PRESETS) - 1:
+            row.append(InlineKeyboardButton(
+                PROMPT_PRESETS[i+1][0],
+                callback_data=f"prompt_pick_{i+1}"
+            ))
+        rows.append(row)
+    # Nút nhập tay ở cuối
+    rows.append([InlineKeyboardButton(
+        PROMPT_PRESETS[-1][0],  # "✏️ Nhập prompt"
+        callback_data="prompt_custom"
+    )])
+    rows.append([InlineKeyboardButton("❌ Hủy", callback_data="home")])
+    return InlineKeyboardMarkup(rows)
+async def animated_splash(message_obj, tg_user, user_db: dict):
+    m = await message_obj.reply_text(SPLASH_F1, parse_mode="Markdown")
+    await asyncio.sleep(0.55)
+    try: await m.edit_text(SPLASH_F2, parse_mode="Markdown")
+    except: pass
+    await asyncio.sleep(0.55)
+    try: await m.edit_text(SPLASH_F3, parse_mode="Markdown")
+    except: pass
+    await asyncio.sleep(0.65)
+    final = splash_final(
+        tg_user.first_name or "bạn",
+        user_db.get("coin", INIT_COINS),
+        user_db.get("number_create_image", 0),
+        user_db.get("number_create_video", 0),
+        user_db.get("package", "free"),
+        user_db.get("roll_call", False),
     )
-    lines = [
-        t("proc_video_starting", lang),
-        t("proc_video_warning",  lang),
-        t("proc_prompt",         lang, prompt=prompt),
-    ]
-    await _edit_log(log_msg, lines)
-
     try:
-        lines.append(t("proc_photo_ready2", lang))
-        await _edit_log(log_msg, lines)
-
-        lines.append(t("proc_video_init", lang))
-        await _edit_log(log_msg, lines)
-
-        start = time.time()
-
-        # ── YOUR VIDEO API CALL HERE ──────────────────────────────────────────
-        # job_id = submit_video_job(photo_url, prompt)
-        # Poll until done (max ~5 min):
-        for _ in range(20):
-            await asyncio.sleep(15)
-            elapsed = int(time.time() - start)
-            await _edit_video_log(log_msg, lines, elapsed)
-            # status, result_url = poll_video_job(job_id)
-            # if status == "done": break
-        result_url = photo_url   # placeholder
-        # ─────────────────────────────────────────────────────────────────────
-
-        inc_video_count(uid)
-        u = get_user(uid)
-        new_coins = (u or {}).get("coin", 0)
-
-        await log_msg.delete()
-        caption = "\n".join([
-            t("vid_result_title", lang), "",
-            t("vid_result_ok",    lang, prompt=prompt, coins=new_coins),
-        ])
-        await bot.send_video(
-            chat_id, result_url,
-            caption=caption, parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_after_video(new_coins, lang),
+        await m.edit_text(
+            final,
+            reply_markup=kb_main(user_db.get("coin", INIT_COINS), user_db.get("package","free"), user_db.get("roll_call", False)),
+            parse_mode="MarkdownV2"
         )
+    except: pass
+    return m
 
-    except Exception as e:
-        logger.error(f"Video gen error: {e}")
-        add_coins(uid, COST_VIDEO)   # refund
-        text = "\n".join([
-            t("vid_fail_title", lang), "",
-            t("vid_fail_body",  lang, error=str(e), cost=COST_VIDEO),
-        ])
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton(t("btn_vid_start", lang), callback_data="create_video"),
-            InlineKeyboardButton(t("btn_home",      lang), callback_data="home"),
-        ]])
-        await _edit_log(log_msg, [text])
+# ══════════════════════════════════════════════
+#  KEYBOARDS
+# ══════════════════════════════════════════════
+def kb_main(coins, package="free", roll_called=False):
+    badge     = rank_badge(coins)
+    pkg       = pkg_badge(package)
+    pkg_rc_reward = ROLLCALL_BY_PKG.get(package, 300)
+
+    # FREE không có điểm danh → hiện nút mua VIP thay thế
+    if package == "free":
+        rc_btn = InlineKeyboardButton("⭐ Nâng VIP để Điểm Danh", callback_data="pay_menu")
+    else:
+        rc_label = "✅ Đã Điểm Danh" if roll_called else f"📅 Điểm Danh (+{pkg_rc_reward}xu)"
+        rc_btn = InlineKeyboardButton(rc_label, callback_data="rollcall")
+
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
+        [InlineKeyboardButton("🎨 ✨  TẠO ẢNH  ✨ 🎨",     callback_data="img_start")],
+        [InlineKeyboardButton("🎬 ✨  TẠO VIDEO  ✨ 🎬",    callback_data="vid_start")],
+        [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
+        [InlineKeyboardButton("💎 Ví Xu", callback_data="balance"), rc_btn],
+        [InlineKeyboardButton("💳 Mua Xu / VIP",      callback_data="pay_menu")],
+        [InlineKeyboardButton("🔗 Vượt link lấy xu?", callback_data="external_link"),
+         InlineKeyboardButton("👥 Mời Bạn (+500xu)",  callback_data="referral")],
+        [InlineKeyboardButton("📊 Thống Kê",           callback_data="stats"),
+         InlineKeyboardButton("📖 Hướng Dẫn",          callback_data="help")],
+        [InlineKeyboardButton("👗✨━━━━━━━━━━━━━━━━━━✨👗", callback_data="noop")],
+        [InlineKeyboardButton(f"{badge} · {pkg}  |  💰 {coins} xu", callback_data="balance")],
+    ])
+def kb_back():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("◀️  Quay Về Menu", callback_data="home")]])
+
+def kb_cancel():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌  Hủy Thao Tác", callback_data="home")]])
+
+def kb_after_image(coins):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 ✨ Tạo Video Từ Ảnh Này!", callback_data="vid_from_last_image")],
+        [InlineKeyboardButton("🎨 Tạo Ảnh Mới",             callback_data="img_start"),
+         InlineKeyboardButton("🏠 Menu Chính",               callback_data="home")],
+        [InlineKeyboardButton(f"💰 Còn lại: {coins} xu",     callback_data="balance")],
+    ])
+
+def kb_after_video(coins):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Tạo Video Mới",  callback_data="vid_start"),
+         InlineKeyboardButton("🎨 Tạo Ảnh Mới",   callback_data="img_start")],
+        [InlineKeyboardButton("🏠 Menu Chính",     callback_data="home")],
+        [InlineKeyboardButton(f"💰 Còn lại: {coins} xu", callback_data="balance")],
+    ])
+
+# ══════════════════════════════════════════════
+#  MESSAGE BUILDERS
+# ══════════════════════════════════════════════
+def msg_balance(full_name, uid, coins, total_images, total_videos=0, package="free"):
+    bar   = coin_bar(coins)
+    badge = rank_badge(coins)
+    pkg   = pkg_badge(package)
+    spent = total_images * COST_IMAGE + total_videos * COST_VIDEO
+    return (
+        f"```\n{BANNER_WALLET}\n```\n\n"
+        f"👤 *{esc(full_name or 'User')}*\n🆔 ID: `{uid}`\n\n"
+        f"┌─ 💎 *SỐ DƯ* ────────────────┐\n"
+        f"│  {badge}  ·  {pkg}\n"
+        f"│  💰 Xu hiện có: `{coins} xu`\n"
+        f"│  {bar}\n└──────────────────────────────┘\n\n"
+        f"┌─ 📈 *LỊCH SỬ* ──────────────┐\n"
+        f"│  🎨 Ảnh đã tạo:   `{total_images}` lần\n"
+        f"│  🎬 Video đã tạo: `{total_videos}` lần\n"
+        f"│  💸 Đã chi:       `{spent} xu`\n"
+        f"└──────────────────────────────┘"
+    )
+
+def msg_stats(uid, coins, total_images, total_videos=0, package="free"):
+    badge = rank_badge(coins)
+    pkg   = pkg_badge(package)
+    spent = total_images * COST_IMAGE + total_videos * COST_VIDEO
+    return (
+        f"📊 *CLOTHESBOT · THỐNG KÊ*\n\n"
+        f"🆔 ID: `{uid}`\n🏆 Hạng: *{badge}*  ·  {pkg}\n\n"
+        f"┌─ 💰 *COINS* ─────────────────┐\n"
+        f"│  Hiện có:   `{coins} xu`\n│  {coin_bar(coins)}\n"
+        f"│  Đã tiêu:   `{spent} xu`\n└──────────────────────────────┘\n\n"
+        f"┌─ 👗 *HOẠT ĐỘNG* ─────────────┐\n"
+        f"│  🎨 Ảnh đã tạo:   `{total_images}` lần\n"
+        f"│  🎬 Video đã tạo: `{total_videos}` lần\n"
+        f"└──────────────────────────────┘"
+    )
+
+def msg_help():
+    return (
+        "📖 *CLOTHESBOT · HƯỚNG DẪN*\n\n"
+        f"🎨 ✨ *TẠO ẢNH* · `{COST_IMAGE} xu/lần`\n"
+        "1\\. Bấm `🎨 ✨ Tạo Ảnh`\n2\\. Gửi ảnh gốc\n3\\. Nhập prompt \\(EN\\)\n4\\. Đợi ~20\\-40 giây\n\n"
+        f"🎬 ✨ *TẠO VIDEO* · `{COST_VIDEO} xu/lần`\n"
+        "1\\. Bấm `🎬 ✨ Tạo Video`\n2\\. Gửi ảnh\n3\\. Nhập mô tả chuyển động\n4\\. Đợi ~2\\-5 phút\n\n"
+        "📅 *ĐIỂM DANH HÀNG NGÀY*\n"
+        "```\n"
+        "  Gói FREE    → +300 xu/ngày\n"
+        "  Gói VIP     → +1.500 xu/ngày\n"
+        "  Gói VIP PRE → +5.000 xu/ngày\n"
+        "```\n"
+        "Reset lúc 00:00 giờ Việt Nam\n\n"
+        "💰 *GÓI MUA XU*\n"
+        "```\n"
+        "   20k  →  1.000 xu  (50 anh / 33 vid)\n"
+        "   50k  →  3.000 xu  (150 anh / 100 vid)\n"
+        "  100k  →  7.000 xu  (350 anh / 233 vid)\n"
+        "  200k  → 16.000 xu  (800 anh / 533 vid)\n"
+        "```\n\n"
+        "💳 *MUA VIP*\n"
+        "Bấm `💳 Mua Xu / VIP` → chọn gói → CK → gửi bill\n"
+        "Admin duyệt trong 5\\-15 phút\\."
+    )
+
+# ══════════════════════════════════════════════
+#  IMAGE API
+# ══════════════════════════════════════════════
+def random_email():
+    rnd = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
+    return f"{rnd}@{random.choice(TEMP_DOMAINS)}"
+
+def create_account():
+    email = random_email()
+    r = requests.post(
+        'https://identitytoolkit.googleapis.com/v1/accounts:signUp',
+        params={'key': FIREBASE_KEY}, headers=FIREBASE_HDR,
+        json={'returnSecureToken': True, 'email': email, 'password': email, 'clientType': 'CLIENT_TYPE_WEB'},
+        timeout=15
+    ).json()
+    if 'idToken' not in r:
+        raise Exception(f"Firebase error: {r.get('error',{}).get('message', str(r))}")
+    r2 = requests.post(
+        'https://sv.aivideo123.site/api/user/init_data', headers=API_HDR,
+        json={'token': r['idToken'], 'code': '-1', 'login_type': 0, 'current_uid': ''},
+        timeout=15
+    ).json()
+    if r2.get('code') != 1:
+        raise Exception(f"init_data error: {r2}")
+    return email, r2['data']['session_token']
+
+def generate_image(image_bytes, filename, prompt, log_cb=None):
+    lines = []; step_counter = [0]
+    def push(line, step_inc=1):
+        lines.append(line); step_counter[0] = min(step_counter[0]+step_inc, 9)
+        if log_cb:
+            try: log_cb(list(lines), step_counter[0])
+            except: pass
+    push(f"  ◈ Target  : {filename[:22]}", 0)
+    push(f"  ◈ Prompt  : {prompt[:28]}...", 0)
+    push(f"  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄", 0)
+    push(f"  [01/07] 🔐 Initializing engine...")
+    email, token = create_account()
+    push(f"  [02/07] ✅ Auth OK → {email[:20]}")
+    headers = {**API_HDR, "x-session-token": token}
+    push(f"  [03/07] 📡 Requesting upload slot...")
+    r = requests.post("https://sv.aivideo123.site/api/item/get_pre_url",
+        headers=headers, json={"file_name": filename, "file_type": 0}, timeout=15).json()
+    if r["code"] != 1: raise Exception("get_pre_url failed")
+    s3_url = r["data"]["url"]; fields = r["data"]["fields"]; s3_key = fields["key"]
+    push(f"  [03/07] ✅ Upload slot secured!")
+    push(f"  [04/07] 📤 Uploading {len(image_bytes)//1024} KB...")
+    up = requests.post(s3_url, data=fields,
+        files={"file": (filename, image_bytes, "image/jpeg")}, timeout=30)
+    if up.status_code not in [200, 201, 204]: raise Exception(f"Upload failed {up.status_code}")
+    push(f"  [04/07] ✅ HTTP {up.status_code} — Upload accepted!")
+    push(f"  [05/07] 👗 ✨ Processing outfit...")
+    inf = requests.post("https://sv.aivideo123.site/api/item/inference2",
+        headers=headers,
+        json={"s3_path": s3_key, "mask_path": "", "prompt": prompt, "ai_model_type": 3},
+        timeout=15).json()
+    if inf["code"] != 1: raise Exception("Inference failed")
+    item_uid  = inf["data"]["item"]["uid"]
+    time_need = inf["data"]["item"]["time_need"]
+    push(f"  [05/07] ✅ Job queued! ETA: {time_need}s")
+    push(f"  [06/07] ✨ Styling... please wait")
+    time.sleep(time_need)
+    push(f"  [07/07] 📥 Fetching result...")
+    r2 = requests.post("https://sv.aivideo123.site/api/item/get_items",
+        headers=headers, json={"page": 0, "page_size": 50}, timeout=15).json()
+    result_url = ""
+    for item in r2["data"]["items"]:
+        if item["uid"] == item_uid:
+            result_url = item.get("thumbnail",""); break
+    if not result_url: raise Exception("Result not found")
+    push(f"  [07/07] ✅ Result URL ready!")
+    push(f"  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄", 0)
+    push(f"  ✨ Downloading final image...", 0)
+    img_resp = requests.get(result_url, timeout=20)
+    push(f"  🎉 CLOTHESBOT · COMPLETE!", 0)
+    return img_resp.content
+
+# ══════════════════════════════════════════════
+#  VIDEO API
+# ══════════════════════════════════════════════
+def _mailtm_create_account():
+    domain = requests.get(f"{MAILTM}/domains", timeout=10).json()["hydra:member"][0]["domain"]
+    u = ''.join(random.choices(string.ascii_lowercase+string.digits, k=12))
+    p = ''.join(random.choices(string.ascii_letters+string.digits, k=14))
+    email = f"{u}@{domain}"
+    r = requests.post(f"{MAILTM}/accounts", json={"address":email,"password":p}, timeout=10)
+    if r.status_code not in (200,201): raise Exception("Tạo email tạm thất bại")
+    tok = requests.post(f"{MAILTM}/token", json={"address":email,"password":p}, timeout=10).json()
+    if "token" not in tok: raise Exception("Đăng nhập email tạm thất bại")
+    return {"email":email,"password":p,"token":tok["token"]}
+
+def _mailtm_poll_pika(token, timeout=120, interval=6):
+    seen, deadline = set(), time.time()+timeout
+    hdrs = {"Authorization":f"Bearer {token}"}
+    while time.time()<deadline:
+        for m in requests.get(f"{MAILTM}/messages",headers=hdrs,timeout=10).json().get("hydra:member",[]):
+            if m["id"] in seen: continue
+            seen.add(m["id"])
+            if "pika" in m.get("from",{}).get("address","").lower() or "pika" in m.get("subject","").lower():
+                return requests.get(f"{MAILTM}/messages/{m['id']}",headers=hdrs,timeout=10).json()
+        time.sleep(interval)
+    return None
+
+def _extract_verify_link(msg):
+    pat = r'https://login\.pika\.art/auth/v1/verify\?[^\s\]\)\'"<>]+'
+    html = msg.get("html","")
+    if isinstance(html,list): html="\n".join(html)
+    for src in [msg.get("text",""), html]:
+        m = re.search(pat, src)
+        if m: return m.group(0).replace("&amp;","&")
+    return None
+
+def _pika_signup(sess, email, password, username):
+    page = sess.get("https://pika.art/signup", timeout=15)
+    m = re.search(r'"([0-9a-f]{40})"', page.text)
+    ah = m.group(1) if m else "4045d309671c08e4d71fe9aff61638cf00467c081f"
+    sess.post("https://pika.art/signup",
+        headers={"accept":"text/x-component","next-action":ah,
+                 "next-router-state-tree":("%5B%22%22%2C%7B%22children%22%3A%5B%22(entry)%22%2C%7B%22children%22%3A%5B%22signup%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2Cfalse%5D%7D%2Cnull%2Cnull%2Cfalse%5D%7D%2Cnull%2Cnull%2Cfalse%5D%7D%2Cnull%2Cnull%2Ctrue%5D"),
+                 "origin":"https://pika.art","referer":"https://pika.art/signup"},
+        files={"1_name":(None,username),"1_email":(None,email),"1_password":(None,password),"0":(None,'["$K1"]')},
+        allow_redirects=False, timeout=20)
+
+def _pika_login(email, password):
+    sess = requests.Session()
+    sess.headers.update({"user-agent":PIKA_UA,"accept-language":"vi-VN,vi;q=0.9,en;q=0.5"})
+    page = sess.get("https://pika.art/login", timeout=15)
+    m = re.search(r'"([0-9a-f]{40})"', page.text)
+    ah = m.group(1) if m else "409cc0dec0398e3142f0f16c994ca8915680346831"
+    resp = sess.post("https://pika.art/login",
+        headers={"accept":"text/x-component","next-action":ah,
+                 "next-router-state-tree":("%5B%22%22%2C%7B%22children%22%3A%5B%22(entry)%22%2C%7B%22children%22%3A%5B%22login%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D"),
+                 "origin":"https://pika.art","referer":"https://pika.art/login"},
+        files={"1_email":(None,email),"1_password":(None,password),"1_to":(None,"/"),"0":(None,'["$K1"]')},
+        allow_redirects=True, timeout=20)
+    sb_cookie = None
+    for c in sess.cookies:
+        if "sb-login-auth-token" in c.name: sb_cookie=c.value; break
+    if not sb_cookie:
+        for r_hist in resp.history:
+            sc = r_hist.headers.get("set-cookie","")
+            if "sb-login-auth-token" in sc:
+                for part in sc.split(";"):
+                    if "sb-login-auth-token" in part:
+                        sb_cookie=part.split("=",1)[-1].strip(); break
+            if sb_cookie: break
+    if not sb_cookie: return {}
+    try:
+        raw = sb_cookie[7:] if sb_cookie.startswith("base64-") else sb_cookie
+        padded = raw+"="*(-len(raw)%4)
+        decoded = json.loads(base64.b64decode(padded).decode())
+        return {"access_token":decoded.get("access_token",""),"user_id":decoded.get("user",{}).get("id",""),"sb_cookie":sb_cookie}
+    except: return {}
+
+def _detect_mime(b, filename):
+    if b[:8]==b'\x89PNG\r\n\x1a\n': return "image/png"
+    if b[:3]==b'\xff\xd8\xff': return "image/jpeg"
+    ext = os.path.splitext(filename)[1].lower().lstrip(".")
+    return {"jpg":"image/jpeg","jpeg":"image/jpeg","png":"image/png","webp":"image/webp"}.get(ext,"image/jpeg")
+
+def _pika_generate_job(access_token, user_id, image_bytes, image_filename,
+                       prompt="gentle movement", model="2.5", duration=5, resolution="480p"):
+    mime = _detect_mime(image_bytes, image_filename)
+    options = json.dumps({"frameRate":24,"camera":{},"parameters":{"guidanceScale":12,"motion":1,"negativePrompt":""},"extend":False})
+    resp = requests.post("https://api.pika.art/generate/v2",
+        headers={"accept":"*/*","authorization":f"Bearer {access_token}","origin":"https://pika.art","referer":"https://pika.art/","user-agent":PIKA_UA},
+        files={"resolution":(None,resolution),"promptText":(None,prompt),"image":(image_filename,image_bytes,mime),
+               "duration":(None,str(duration)),"model":(None,model),"contentType":(None,"i2v"),"options":(None,options),
+               "creditCost":(None,"12"),"userId":(None,user_id)},
+        timeout=60)
+    data = resp.json()
+    if data.get("success")==False: raise Exception(data.get("error","Unknown error"))
+    job_id = (data.get("id") or data.get("jobId") or data.get("data",{}).get("id") or data.get("data",{}).get("generation",{}).get("id"))
+    if not job_id: raise Exception("Không nhận được Job ID")
+    return str(job_id)
+
+def _pika_poll_video(access_token, sb_cookie, job_id, timeout=300, interval=10):
+    lib_hash = "4011bb5085d98313ee4cb9f6c1e0e4f1323144af54"
+    cookie_str = (sb_cookie if sb_cookie.startswith("sb-login-auth-token=") else f"sb-login-auth-token={sb_cookie}")
+    deadline = time.time()+timeout
+    while time.time()<deadline:
         try:
-            await log_msg.edit_reply_markup(reply_markup=kb)
-        except Exception:
-            pass
-    finally:
-        release_slot(uid)
+            resp = requests.post("https://pika.art/library",
+                headers={"accept":"text/x-component","accept-language":"vi-VN,vi;q=0.9,en;q=0.5","content-type":"text/plain;charset=UTF-8",
+                         "next-action":lib_hash,"next-router-state-tree":("%5B%22%22%2C%7B%22children%22%3A%5B%22(dashboard)%22%2C%7B%22children%22%3A%5B%22library%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2Cfalse%5D%7D%2Cnull%2Cnull%2Cfalse%5D%7D%2Cnull%2Cnull%2Cfalse%5D%7D%2Cnull%2Cnull%2Ctrue%5D"),
+                         "origin":"https://pika.art","referer":"https://pika.art/library","user-agent":PIKA_UA,"cookie":cookie_str},
+                data=json.dumps([{"ids":[job_id]}]), timeout=20)
+            if resp.status_code==200:
+                raw = resp.text
+                for line in raw.split("\n"):
+                    line=line.strip()
+                    if not line: continue
+                    if re.match(r'^\d+:',line):
+                        payload=line.split(":",1)[1]
+                        try:
+                            obj=json.loads(payload)
+                            if obj.get("success") and "data" in obj:
+                                for result in obj["data"].get("results",[]):
+                                    for video in result.get("videos",[]):
+                                        url=(video.get("resultUrl") or video.get("sharingUrl") or video.get("url"))
+                                        if url and url.endswith(".mp4"): return url
+                                    url=result.get("resultUrl") or result.get("videoUrl")
+                                    if url and url.endswith(".mp4"): return url
+                        except: pass
+                for pat in [r'"resultUrl"\s*:\s*"(https://[^"]+\.mp4)"',r'"sharingUrl"\s*:\s*"(https://[^"]+\.mp4)"']:
+                    m=re.search(pat,raw)
+                    if m: return m.group(1)
+                m=re.search(r'"status"\s*:\s*"([^"]+)"',raw)
+                if m and m.group(1) in ("failed","error","cancelled"): raise Exception(f"Job thất bại: {m.group(1)}")
+        except Exception as e:
+            if "thất bại" in str(e): raise
+        time.sleep(interval)
+    raise Exception(f"Quá thời gian {timeout}s, video chưa hoàn thành")
 
+def pika_create_account_and_generate(image_bytes, filename, prompt="gentle movement", log_cb=None):
+    lines=[]; step_c=[0]
+    def push(line, step_inc=1):
+        lines.append(line); step_c[0]=min(step_c[0]+step_inc,9)
+        if log_cb:
+            try: log_cb(list(lines),step_c[0])
+            except: pass
+    push(f"  ◈ Prompt : {prompt[:30]}",0); push(f"  ◈ Output : 🎬 480p | ⏱ 5 giây",0); push(f"  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄",0)
+    push(f"  [01/06] 📧 Tạo email tạm..."); mt=_mailtm_create_account(); push(f"  [01/06] ✅ Email: {mt['email'][:25]}")
+    push(f"  [02/06] 🔧 Khởi tạo phiên xử lý...")
+    rnd_name=''.join(random.choices(string.ascii_lowercase,k=8)); pika_pass=''.join(random.choices(string.ascii_letters+string.digits,k=10))+"Aa1!"
+    sess=requests.Session(); sess.headers.update({"user-agent":PIKA_UA}); _pika_signup(sess,mt["email"],pika_pass,rnd_name)
+    push(f"  [02/06] ✅ Đã gửi yêu cầu đăng ký")
+    push(f"  [03/06] 📨 Chờ email xác nhận..."); msg=_mailtm_poll_pika(mt["token"],timeout=120,interval=6)
+    if not msg: raise Exception("Không nhận được email xác nhận")
+    verify_url=_extract_verify_link(msg)
+    if not verify_url: raise Exception("Không tìm thấy link xác nhận")
+    vr=requests.Session(); vr.headers.update({"user-agent":PIKA_UA}); vr.get(verify_url,allow_redirects=True,timeout=20)
+    push(f"  [03/06] ✅ Xác nhận email OK")
+    push(f"  [04/06] 🔐 Xác thực hệ thống..."); lr=_pika_login(mt["email"],pika_pass)
+    if not lr.get("access_token"): raise Exception("Xác thực thất bại")
+    push(f"  [04/06] ✅ Xác thực thành công!")
+    push(f"  [05/06] 🎬 Gửi yêu cầu render..."); job_id=_pika_generate_job(lr["access_token"],lr["user_id"],image_bytes,filename,prompt=prompt)
+    push(f"  [05/06] ✅ Job ID: {job_id[:8]}...")
+    push(f"  [06/06] ⏳ Đang render (~2-5 phút)..."); time.sleep(20)
+    video_url=_pika_poll_video(lr["access_token"],lr["sb_cookie"],job_id,timeout=300,interval=10)
+    push(f"  [06/06] ✅ 🎬 Video sẵn sàng!"); push(f"  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄",0); push(f"  📥 Đang tải video về...",0)
+    vresp=requests.get(video_url,timeout=180,stream=True); video_bytes=b"".join(vresp.iter_content(chunk_size=8192))
+    push(f"  ✅ {len(video_bytes)//1024} KB — 🎉 Hoàn tất!",0)
+    return video_bytes, video_url
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Admin commands
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════
+#  ADMIN COMMANDS (chỉ @shadowbotnet99)
+# ══════════════════════════════════════════════
 
-async def cmd_addcoins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid  = str(update.effective_user.id)
-    lang = get_user_lang(uid)
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text(t("admin_no_perm", lang))
+def is_admin(u) -> bool:
+    return (u.username or "").lower() == ADMIN_USERNAME.lower()
+
+async def cmd_addcoins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not is_admin(u):
+        await update.message.reply_text("⛔ Bạn không có quyền dùng lệnh này.")
         return
-    if len(context.args) < 2:
-        await update.message.reply_text(
-            t("admin_addcoins_usage", lang), parse_mode=ParseMode.MARKDOWN_V2
-        )
+    # /addcoins @username <số xu>
+    args = ctx.args
+    if len(args) < 2:
+        await update.message.reply_text("❌ Cú pháp: `/addcoins @username <số xu>`", parse_mode="MarkdownV2")
         return
-    username = context.args[0].lstrip("@")
+    target = args[0].lstrip("@")
     try:
-        amount = int(context.args[1])
+        amount = int(args[1])
     except ValueError:
-        await update.message.reply_text(t("admin_not_integer", lang))
+        await update.message.reply_text("❌ Số xu phải là số nguyên.")
         return
 
-    ok, new_bal = admin_add_coins(username, amount)   # uses real DB func
-    if not ok:
+    ok, new_coin = admin_add_coins(target, amount)
+    if ok:
         await update.message.reply_text(
-            t("admin_user_notfound", lang, user=username),
-            parse_mode=ParseMode.MARKDOWN_V2,
+            f"✅ Đã thêm `{amount}` xu cho `@{esc(target)}`\\.\n"
+            f"💰 Số dư mới: `{new_coin}` xu",
+            parse_mode="MarkdownV2"
         )
+    else:
+        await update.message.reply_text(f"❌ Không tìm thấy user `@{esc(target)}`\\.", parse_mode="MarkdownV2")
+
+async def cmd_setpackage(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not is_admin(u):
+        await update.message.reply_text("⛔ Bạn không có quyền dùng lệnh này.")
         return
+    # /setpackage @username free|vip|vip_pro
+    args = ctx.args
+    if len(args) < 2:
+        await update.message.reply_text("❌ Cú pháp: `/setpackage @username free|vip|vip_pro`", parse_mode="MarkdownV2")
+        return
+    target  = args[0].lstrip("@")
+    package = args[1].lower()
+    if package not in ("free", "vip", "vip_pro"):
+        await update.message.reply_text("❌ Package hợp lệ: `free`, `vip`, `vip_pro`", parse_mode="MarkdownV2")
+        return
+
+    ok = admin_set_package(target, package)
+    if ok:
+        pkg_label = {"free":"🆓 FREE","vip":"👑 VIP","vip_pro":"💎 VIP PRO"}.get(package, package)
+        await update.message.reply_text(
+            f"✅ Đã cập nhật gói `@{esc(target)}` → *{pkg_label}*",
+            parse_mode="MarkdownV2"
+        )
+    else:
+        await update.message.reply_text(f"❌ Không tìm thấy user `@{esc(target)}`\\.", parse_mode="MarkdownV2")
+
+async def cmd_userinfo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not is_admin(u):
+        await update.message.reply_text("⛔ Bạn không có quyền dùng lệnh này.")
+        return
+    args = ctx.args
+    if not args:
+        await update.message.reply_text("❌ Cú pháp: `/userinfo @username`", parse_mode="MarkdownV2")
+        return
+    target = args[0].lstrip("@")
+    data   = get_user_by_username(target)
+    if not data:
+        await update.message.reply_text(f"❌ Không tìm thấy `@{esc(target)}`\\.", parse_mode="MarkdownV2")
+        return
+    pkg   = pkg_badge(data.get("package","free"))
+    badge = rank_badge(data.get("coin",0))
     await update.message.reply_text(
-        t("admin_addcoins_ok", lang, amount=amount, user=username, coins=new_bal),
-        parse_mode=ParseMode.MARKDOWN_V2,
+        f"👤 *@{esc(target)}*\n"
+        f"🆔 ID: `{data.get('id_user','')}`\n"
+        f"💰 Xu: `{data.get('coin',0)}`\n"
+        f"🏆 {badge}  ·  {pkg}\n"
+        f"🎨 Ảnh: `{data.get('number_create_image',0)}`\n"
+        f"🎬 Video: `{data.get('number_create_video',0)}`\n"
+        f"📅 Roll call: `{data.get('roll_call',False)}`",
+        parse_mode="MarkdownV2"
     )
 
+# ══════════════════════════════════════════════
+#  HANDLERS
+# ══════════════════════════════════════════════
 
-async def cmd_setpackage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid  = str(update.effective_user.id)
-    lang = get_user_lang(uid)
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text(t("admin_no_perm", lang))
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+
+    # Lưu ref arg vào session TRƯỚC khi check channel
+    # (để nếu user chưa join, sau khi join bấm lại vẫn còn ref)
+    ref_inviter_id = None
+    if ctx.args:
+        arg = ctx.args[0]
+        if arg.startswith("ref_"):
+            ref_inviter_id = arg[4:]
+            # Lưu tạm vào session để dùng lại nếu user chưa join channel
+            sess = get_session(u.id)
+            sess["pending_ref"] = ref_inviter_id
+
+    if not await check_join(ctx.bot, u.id):
+        await send_join_prompt(lambda text, **kw: update.message.reply_text(text, **kw))
         return
-    if len(context.args) < 2:
-        await update.message.reply_text(
-            t("admin_setpkg_usage", lang), parse_mode=ParseMode.MARKDOWN_V2
+
+    # Lấy ref từ session nếu không có trong args (trường hợp user join channel rồi bấm lại)
+    sess = get_session(u.id)
+    if not ref_inviter_id:
+        ref_inviter_id = sess.get("pending_ref")
+
+    # Kiểm tra user mới TRƯỚC khi tạo
+    is_new_user = get_user(str(u.id)) is None
+    user_db = get_or_create_user(str(u.id), u.username or "")
+
+    # Áp dụng referral nếu là user mới và có inviter hợp lệ
+    if is_new_user and ref_inviter_id:
+        success, new_inviter_coin, new_invitee_coin = apply_referral(str(u.id), ref_inviter_id)
+        if success:
+            # Xóa pending_ref sau khi dùng
+            sess.pop("pending_ref", None)
+
+            # Thông báo cho người mời
+            try:
+                await ctx.bot.send_message(
+                    chat_id=int(ref_inviter_id),
+                    text=(
+                        f"```\n{BANNER_SUCCESS}\n```\n\n"
+                        f"🎉 *BẠN VỪA MỜI THÀNH CÔNG\\!*\n\n"
+                        f"```\n"
+                        f"  👤 Người mới:  {esc(u.first_name or 'User')}\n"
+                        f"  🎁 Thưởng:    +{REFERRAL_REWARD_INVITER} xu\n"
+                        f"  💰 Số dư mới: {new_inviter_coin} xu\n"
+                        f"```"
+                    ),
+                    parse_mode="MarkdownV2"
+                )
+            except Exception:
+                pass
+
+            # Thông báo cho người được mời
+            await update.message.reply_text(
+                f"```\n{BANNER_SUCCESS}\n```\n\n"
+                f"🎁 *CHÀO MỪNG BẠN MỚI\\!*\n\n"
+                f"```\n"
+                f"  🔗 Bạn đã join qua link mời\n"
+                f"  🎁 Nhận ngay: +{REFERRAL_REWARD_INVITEE} xu bonus\n"
+                f"  💰 Cộng vào ví của bạn rồi\\!\n"
+                f"```\n\n"
+                f"👇 Bắt đầu tạo ảnh\\, tạo video ngay nào\\!",
+                parse_mode="MarkdownV2"
+            )
+            # Reload để lấy số xu mới nhất
+            user_db = get_or_create_user(str(u.id), u.username or "")
+
+    full_clear_session(u.id)
+    await animated_splash(update.message, u, user_db)
+
+
+async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    d = q.data
+    u = q.from_user
+
+    if d == "noop": return
+
+    # ── Check join ──
+    if d == "check_join":
+        if await check_join(ctx.bot, u.id):
+            # Kiểm tra user mới TRƯỚC khi tạo
+            is_new_user = get_user(str(u.id)) is None
+            
+            # Lấy pending_ref từ session (đã lưu khi bấm link ref_ lúc chưa join)
+            pending_ref = get_session(u.id).get("pending_ref")
+            
+            user_db = get_or_create_user(str(u.id), u.username or "")
+            
+            # Áp dụng referral nếu là user mới
+            if is_new_user and pending_ref:
+                success, new_inviter_coin, new_invitee_coin = apply_referral(str(u.id), pending_ref)
+                if success:
+                    get_session(u.id).pop("pending_ref", None)
+                    # Thông báo cho người mời
+                    try:
+                        await ctx.bot.send_message(
+                            chat_id=int(pending_ref),
+                            text=(
+                                f"```\n{BANNER_SUCCESS}\n```\n\n"
+                                f"🎉 *BẠN VỪA MỜI THÀNH CÔNG\\!*\n\n"
+                                f"```\n"
+                                f"  👤 Người mới:  {esc(u.first_name or 'User')}\n"
+                                f"  🎁 Thưởng:    +{REFERRAL_REWARD_INVITER} xu\n"
+                                f"  💰 Số dư mới: {new_inviter_coin} xu\n"
+                                f"```"
+                            ),
+                            parse_mode="MarkdownV2"
+                        )
+                    except Exception:
+                        pass
+                    # Thông báo cho người được mời
+                    await q.answer(f"🎁 Chào mừng! Bạn nhận +{REFERRAL_REWARD_INVITEE} xu bonus!", show_alert=True)
+                    # Reload user_db sau khi cộng xu
+                    user_db = get_or_create_user(str(u.id), u.username or "")
+
+            full_clear_session(u.id)
+            await q.edit_message_text(
+                splash_final(u.first_name or "bạn",
+                            user_db.get("coin", INIT_COINS),
+                            user_db.get("number_create_image", 0),
+                            user_db.get("number_create_video", 0),
+                            user_db.get("package", "free"),
+                            user_db.get("roll_call", False)),
+                reply_markup=kb_main(user_db.get("coin", INIT_COINS), user_db.get("package","free"), user_db.get("roll_call", False)),
+                parse_mode="MarkdownV2"
+            )
+        else:
+            await q.answer("❌ Bạn chưa join channel! Hãy join rồi thử lại.", show_alert=True)
+        return
+
+    # ── Channel gate ──
+    if not await check_join(ctx.bot, u.id):
+        await q.answer("⚠️ Bạn cần join channel để dùng bot!", show_alert=True)
+        return
+
+    user_db = get_or_create_user(str(u.id), u.username or "")
+    sess    = get_session(u.id)
+    coins   = user_db.get("coin", INIT_COINS)
+    package = user_db.get("package", "free")
+
+    # ── PAYMENT callbacks ──
+    if d in ("pay_menu","pay_coin_menu","pay_vip_menu") or \
+       d.startswith("pay_buy_") or d.startswith("pay_sendphoto_"):
+        await handle_payment_callback(d, q, u, user_db, sessions_db)
+        return
+
+    # ── Home ──
+    if d == "home":
+        full_clear_session(u.id)
+        user_db = get_or_create_user(str(u.id), u.username or "")
+        coins   = user_db.get("coin", INIT_COINS)
+        await q.edit_message_text(
+            splash_final(u.first_name or "bạn", coins,
+                         user_db.get("number_create_image",0),
+                         user_db.get("number_create_video",0),
+                         user_db.get("package","free"),
+                         user_db.get("roll_call", False)),
+            reply_markup=kb_main(coins, user_db.get("package","free"), user_db.get("roll_call", False)),
+            parse_mode="MarkdownV2"
+        ); return
+
+    # ── Balance ──
+    if d == "balance":
+        await q.edit_message_text(
+            msg_balance(u.full_name or "", u.id, coins,
+                        user_db.get("number_create_image",0),
+                        user_db.get("number_create_video",0),
+                        package),
+            reply_markup=kb_back(), parse_mode="MarkdownV2"
+        ); return
+
+    # ── Stats ──
+    if d == "stats":
+        await q.edit_message_text(
+            msg_stats(u.id, coins,
+                      user_db.get("number_create_image",0),
+                      user_db.get("number_create_video",0),
+                      package),
+            reply_markup=kb_back(), parse_mode="MarkdownV2"
+        ); return
+
+    # ── Help ──
+    if d == "help":
+        await q.edit_message_text(msg_help(), reply_markup=kb_back(), parse_mode="MarkdownV2"); return
+
+# ── Roll Call (Điểm danh) ──
+    if d == "rollcall":
+        # Gói FREE không được điểm danh
+        if package == "free":
+            await q.edit_message_text(
+                f"```\n{BANNER_ERROR}\n```\n\n"
+                f"⛔ *ĐIỂM DANH CHỈ DÀNH CHO VIP\\!*\n\n"
+                f"```\n"
+                f"  🆓 FREE     → Không có điểm danh\n"
+                f"  👑 VIP      → +1\\.500 xu/ngày\n"
+                f"  💎 VIP PRO  → +5\\.000 xu/ngày\n"
+                f"```\n\n"
+                f"💡 *Cách nhận xu miễn phí:*\n"
+                f"🔗 Vượt link → nhận xu mỗi ngày\n"
+                f"👥 Mời bạn bè → \\+500 xu / người\n\n"
+                f"⬆️ Nâng cấp VIP để điểm danh hàng ngày\\!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Nâng Cấp VIP Ngay!",    callback_data="pay_menu")],
+                    [InlineKeyboardButton("🔗 Vượt Link Lấy Xu",      callback_data="external_link")],
+                    [InlineKeyboardButton("👥 Mời Bạn (+500xu)",       callback_data="referral")],
+                    [InlineKeyboardButton("◀️ Quay Về Menu",           callback_data="home")],
+                ]),
+                parse_mode="MarkdownV2"
+            )
+            return
+
+        success, new_coin, reward = do_rollcall(str(u.id))
+        if success:
+            pkg_label = {"vip": "👑 VIP", "vip_pro": "💎 VIP PRO"}.get(package, package.upper())
+            await q.edit_message_text(
+                f"```\n{BANNER_SUCCESS}\n```\n\n"
+                f"📅 *ĐIỂM DANH THÀNH CÔNG\\!*\n\n"
+                f"```\n  🏷  Gói:        {pkg_label}\n  🎁 Nhận được:  \\+{reward} xu\n  💰 Số dư mới:  {new_coin} xu\n```\n\n"
+                f"✅ Quay lại lúc 00:00 ngày mai để điểm danh tiếp\\!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎨 Tạo Ảnh Ngay!", callback_data="img_start"),
+                     InlineKeyboardButton("🎬 Tạo Video!",    callback_data="vid_start")],
+                    [InlineKeyboardButton("🏠 Menu",          callback_data="home")],
+                    [InlineKeyboardButton(f"💰 Số dư: {new_coin} xu", callback_data="balance")],
+                ]),
+                parse_mode="MarkdownV2"
+            )
+        else:
+            pkg_reward = ROLLCALL_BY_PKG.get(package, 0)
+            await q.answer(f"✅ Đã điểm danh hôm nay rồi! (+{pkg_reward} xu mỗi ngày)", show_alert=True)
+        return
+
+    # ── Start Image ──
+    if d == "img_start":
+        if coins < COST_IMAGE:
+            await q.edit_message_text(
+                f"⚠️ *KHÔNG ĐỦ XU\\!*\n\n"
+                f"```\n  Cần:    {COST_IMAGE} xu\n  Có:     {coins} xu\n  Thiếu:  {COST_IMAGE-coins} xu\n```\n\n"
+                f"💳 Mua xu ngay hoặc điểm danh nhận xu miễn phí\\!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳  Mua Xu →",              callback_data="pay_menu")],
+                    [InlineKeyboardButton("📅  Điểm Danh \\(\\+100xu\\)", callback_data="rollcall")],
+                    [InlineKeyboardButton("◀️  Quay Về Menu",            callback_data="home")],
+                ]), parse_mode="MarkdownV2"
+            ); return
+        sess["state"] = "wait_photo"
+        sess.pop("photo_id", None); sess.pop("photo_name", None)
+        await q.edit_message_text(
+            f"🎨 ✨ *TẠO ẢNH*\n\n"
+            f"```\n  💰 Số dư:   {coins} xu\n  💸 Chi phí: {COST_IMAGE} xu / lần\n  📊 Sau khi: {coins-COST_IMAGE} xu\n```\n\n"
+            f"📸 *BƯỚC 1 / 2* — Gửi ảnh bạn muốn chỉnh sửa:",
+            reply_markup=kb_cancel(), parse_mode="MarkdownV2"
+        ); return
+
+    # ── Start Video ──
+    if d == "vid_start":
+        if coins < COST_VIDEO:
+            await q.edit_message_text(
+                f"⚠️ *KHÔNG ĐỦ XU\\!*\n\n"
+                f"```\n  Cần:    {COST_VIDEO} xu\n  Có:     {coins} xu\n```\n\n💳 Mua xu để tạo video\\!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳  Mua Xu →",          callback_data="pay_menu")],
+                    [InlineKeyboardButton("📅  Điểm Danh",         callback_data="rollcall")],
+                    [InlineKeyboardButton("◀️  Quay Về Menu",        callback_data="home")],
+                ]), parse_mode="MarkdownV2"
+            ); return
+        sess["state"] = "wait_video_photo"
+        sess.pop("video_photo_id",None); sess.pop("video_photo_bytes",None); sess.pop("video_photo_name",None)
+        await q.edit_message_text(
+            f"🎬 ✨ *TẠO VIDEO*\n\n"
+            f"```\n  💰 Số dư:   {coins} xu\n  💸 Chi phí: {COST_VIDEO} xu / lần\n  🎞️  Output:  480p | 5 giây\n```\n\n"
+            f"📸 *BƯỚC 1 / 2* — Gửi ảnh bạn muốn chuyển thành video:",
+            reply_markup=kb_cancel(), parse_mode="MarkdownV2"
+        ); return
+
+    # ── Video từ ảnh vừa tạo ──
+    if d == "vid_from_last_image":
+        last_img  = sess.get("last_image_bytes")
+        last_name = sess.get("last_image_name","image.jpg")
+        if not last_img:
+            await q.edit_message_text(
+                "❌ Không tìm thấy ảnh vừa tạo\\. Vui lòng tạo ảnh trước\\!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎨 ✨ Tạo Ảnh", callback_data="img_start")],
+                    [InlineKeyboardButton("🏠 Menu",       callback_data="home")],
+                ]), parse_mode="MarkdownV2"
+            ); return
+        if coins < COST_VIDEO:
+            await q.edit_message_text(
+                f"⚠️ *KHÔNG ĐỦ XU\\!*\n\n```\n  Cần:    {COST_VIDEO} xu\n  Có:     {coins} xu\n```",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Mua Xu",  callback_data="pay_menu")],
+                    [InlineKeyboardButton("🏠 Menu",    callback_data="home")],
+                ]), parse_mode="MarkdownV2"
+            ); return
+        sess["state"]             = "wait_video_prompt"
+        sess["video_photo_bytes"] = last_img
+        sess["video_photo_name"]  = last_name
+        await q.edit_message_text(
+            f"🎬 ✨ *TẠO VIDEO TỪ ẢNH VỪA TẠO*\n\n"
+            f"```\n  💸 Chi phí: {COST_VIDEO} xu\n  📊 Sau khi: {coins-COST_VIDEO} xu\n  🎞️  Output:  480p | 5 giây\n```\n\n"
+            f"✏️ *BƯỚC 2 / 2 — Nhập mô tả chuyển động:*\n\n"
+            f"💡 `gentle swaying motion`\n`hair blowing in the wind`\n`slow zoom in, cinematic`",
+            reply_markup=kb_cancel(), parse_mode="MarkdownV2"
+        ); return
+
+    if d == "external_link":
+        # u.id
+        id_key = KeyManager(str(u.id), str(u.username)).get_key()
+        link = f"{WEB_BASE_URL}/getkey?user_id={id_key}"
+
+        sess["state"] = "wait_key"
+
+        await q.edit_message_text(
+            "🔑 *NHẬN XU BẰNG KEY*\n\n"
+            "```\n"
+            "  Bước 1: Vượt link bên dưới\n"
+            "  Bước 2: Lấy KEY\n"
+            "  Bước 3: Dán KEY vào bot \n"
+            "```\n\n"
+            "🎁 Phần thưởng: `+20 xu`",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 Lấy KEY", url=link)],
+                [InlineKeyboardButton("❌ Huỷ", callback_data="home")]
+            ]),
+            parse_mode="MarkdownV2"
         )
         return
-    username = context.args[0].lstrip("@")
-    pkg      = context.args[1].lower()
-    if pkg not in ("free", "vip", "vip_pro"):
-        await update.message.reply_text(
-            t("admin_setpkg_invalid", lang), parse_mode=ParseMode.MARKDOWN_V2
+    
+    # ── Referral ──
+    if d == "referral":
+        bot_info  = await ctx.bot.get_me()
+        bot_username = bot_info.username
+        ref_link  = f"https://t.me/{bot_username}?start=ref_{u.id}"
+        stats     = get_referral_stats(str(u.id))
+        count     = stats["count"]
+        earned    = stats["earned"]
+        await q.edit_message_text(
+            f"```\n╔══════════════════════════════════════╗\n"
+            f"║  👥  CLOTHESBOT  ·  MỜI BẠN  👥     ║\n"
+            f"╚══════════════════════════════════════╝\n```\n\n"
+            f"🔗 *LINK MỜI CỦA BẠN:*\n"
+            f"`{esc(ref_link)}`\n\n"
+            f"┌─ 🎁 *PHẦN THƯỞNG* ────────────────┐\n"
+            f"│  👤 Bạn nhận:          `+{REFERRAL_REWARD_INVITER} xu` / người\n"
+            f"│  🎁 Người được mời:    `+{REFERRAL_REWARD_INVITEE} xu` bonus\n"
+            f"└───────────────────────────────────┘\n\n"
+            f"┌─ 📊 *THỐNG KÊ CỦA BẠN* ──────────┐\n"
+            f"│  👥 Đã mời thành công: `{count}` người\n"
+            f"│  💰 Tổng xu kiếm được: `{earned} xu`\n"
+            f"└───────────────────────────────────┘\n\n"
+            f"📋 *Cách dùng:*\n"
+            f"1\\. Copy link trên\n"
+            f"2\\. Gửi cho bạn bè\n"
+            f"3\\. Họ bấm link → /start → bạn nhận `{REFERRAL_REWARD_INVITER} xu` ngay\\!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 Copy Link Mời", switch_inline_query=ref_link)],
+                [InlineKeyboardButton("📤 Chia Sẻ Ngay!", url=f"https://t.me/share/url?url={ref_link}&text=🎁+Dùng+link+này+để+nhận+{REFERRAL_REWARD_INVITEE}+xu+bonus+khi+dùng+ClothesBot!")],
+                [InlineKeyboardButton("◀️ Quay Về Menu", callback_data="home")],
+            ]),
+            parse_mode="MarkdownV2"
         )
         return
+    # ── Prompt Presets ──
+    if d.startswith("prompt_pick_"):
+        idx = int(d.split("_")[-1])
+        if idx < len(PROMPT_PRESETS):
+            name, prompt_text = PROMPT_PRESETS[idx]
+            if prompt_text == "__custom__":
+                sess["state"] = "wait_prompt"
+                await q.edit_message_text(
+                    "✏️ *NHẬP PROMPT CỦA BẠN:*\n\n"
+                    "💡 Ví dụ: `wear a red summer dress`\n"
+                    "`wearing a suit, professional`\n"
+                    "`anime style, colorful outfit`",
+                    reply_markup=kb_cancel(), parse_mode="MarkdownV2"
+                )
+            else:
+                # Lưu prompt vào session, chuyển thẳng sang wait_prompt
+                # để handle_text xử lý như bình thường
+                sess["state"]          = "wait_prompt"
+                sess["preset_prompt"]  = prompt_text
+                await q.edit_message_text(
+                    f"✅ *ĐÃ CHỌN:* {name}\n\n"
+                    f"```\n{prompt_text[:80]}\\.\\.\\.\n```\n\n"
+                    f"⚡ Đang khởi động xử lý\\.\\.\\.",
+                    parse_mode="MarkdownV2"
+                )
+                # Tự động trigger xử lý với preset prompt
+                # Giả lập như user gõ prompt
+                photo_id   = sess.get("photo_id")
+                photo_name = sess.get("photo_name", "photo.jpg")
+                if not photo_id:
+                    await q.edit_message_text(
+                        "❌ Không tìm thấy ảnh\\. Vui lòng thử lại\\!",
+                        reply_markup=kb_cancel(), parse_mode="MarkdownV2"
+                    )
+                    return
 
-    ok = admin_set_package(username, pkg)   # uses real DB func
-    if not ok:
-        await update.message.reply_text(
-            t("admin_user_notfound", lang, user=username),
-            parse_mode=ParseMode.MARKDOWN_V2,
+                ok_spend, new_bal = db_spend_coins(str(u.id), COST_IMAGE)
+                if not ok_spend:
+                    await q.edit_message_text(
+                        f"⚠️ *KHÔNG ĐỦ XU\\!*\nCần `{COST_IMAGE}` xu \\| Có `{new_bal}` xu",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("💳 Mua Xu",  callback_data="pay_menu")],
+                            [InlineKeyboardButton("🏠 Menu",    callback_data="home")],
+                        ]), parse_mode="MarkdownV2"
+                    )
+                    return
+
+                _photo_id   = photo_id
+                _photo_name = photo_name
+                _prompt     = prompt_text
+                clear_session(u.id)
+
+                # Gửi processing message mới
+                proc_msg = await ctx.bot.send_message(
+                    chat_id=u.id,
+                    text=render_log_step(0, 9, [
+                        f"  ⏳ Khởi động CLOTHESBOT...",
+                        f"  📝 Prompt: {_prompt[:35]}"
+                    ], "~30-40s", tick=0),
+                    parse_mode="Markdown"
+                )
+
+                tick_counter = [0]
+                import queue as _queue
+                log_queue = _queue.Queue()
+                def log_cb_q(lines, step=0): log_queue.put((list(lines), step))
+
+                async def updater_preset():
+                    while True:
+                        try:
+                            lines, step = log_queue.get_nowait()
+                            tick_counter[0] += 1
+                            try:
+                                await proc_msg.edit_text(
+                                    render_log_step(step, 9, lines, "...", tick=tick_counter[0]),
+                                    parse_mode="Markdown"
+                                )
+                            except: pass
+                        except _queue.Empty: pass
+                        await asyncio.sleep(1.5)
+
+                if package == "free":
+                    queue_msg = await ctx.bot.send_message(
+                        chat_id=u.id,
+                        text="⏳ Đang kiểm tra hàng chờ\\.\\.\\.",
+                        parse_mode="MarkdownV2"
+                    )
+                    async def queue_status_cb_p(status_text, pos):
+                        try: await queue_msg.edit_text(status_text, parse_mode="MarkdownV2")
+                        except: pass
+                    entered = await enter_queue(str(u.id), package, queue_status_cb_p)
+                    if not entered:
+                        await queue_msg.edit_text("❌ Hàng chờ quá tải\\. Vui lòng thử lại sau\\!", parse_mode="MarkdownV2")
+                        db_add_coins(str(u.id), COST_IMAGE)
+                        return
+                    try: await queue_msg.delete()
+                    except: pass
+
+                loop = asyncio.get_event_loop()
+                updater_task = asyncio.ensure_future(updater_preset())
+
+                try:
+                    photo_file  = await ctx.bot.get_file(_photo_id)
+                    photo_bytes = await photo_file.download_as_bytearray()
+                    log_cb_q(["  ✅ Ảnh đã tải xong!", "  👗 Đang phân tích trang phục..."], 1)
+                    result_bytes = await loop.run_in_executor(
+                        None, generate_image, bytes(photo_bytes), _photo_name, _prompt, log_cb_q
+                    )
+                except Exception as e:
+                    updater_task.cancel()
+                    if package == "free": leave_queue(str(u.id))
+                    db_add_coins(str(u.id), COST_IMAGE)
+                    await proc_msg.edit_text(
+                        f"```\n{BANNER_ERROR}\n```\n\n❌ *XỬ LÝ THẤT BẠI*\n\n"
+                        f"```\n  Lỗi: {str(e)[:55]}\n  💰 Đã hoàn lại: {COST_IMAGE} xu\n```",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔄 Thử Lại", callback_data="img_start")],
+                            [InlineKeyboardButton("🏠 Menu",    callback_data="home")],
+                        ]), parse_mode="Markdown"
+                    )
+                    return
+
+                updater_task.cancel()
+                if package == "free": leave_queue(str(u.id))
+                inc_image_count(str(u.id))
+
+                fresh_sess = get_session(u.id)
+                fresh_sess["last_image_bytes"] = result_bytes
+                fresh_sess["last_image_name"]  = _photo_name
+
+                await ctx.bot.send_photo(
+                    chat_id=u.id,
+                    photo=result_bytes,
+                    caption=(
+                        f"✨ *CLOTHESBOT · KẾT QUẢ TẠO ẢNH*\n\n"
+                        f"```\n  ✅ Xử lý thành công\n  📝 {name}\n  💰 Còn lại: {new_bal} xu\n```\n\n"
+                        f"👇 *Muốn tạo video từ ảnh này không?*"
+                    ),
+                    parse_mode="MarkdownV2",
+                    reply_markup=kb_after_image(new_bal)
+                )
+                await proc_msg.delete()
+        return
+
+    if d == "prompt_custom":
+        sess["state"] = "wait_prompt"
+        await q.edit_message_text(
+            "✏️ *NHẬP PROMPT CỦA BẠN:*\n\n"
+            "💡 Ví dụ:\n"
+            "`wear a red summer dress`\n"
+            "`wearing a suit, professional look`\n"
+            "`anime style, colorful outfit`\n\n"
+            "📝 Gõ mô tả bằng tiếng Anh và gửi:",
+            reply_markup=kb_cancel(), parse_mode="MarkdownV2"
         )
         return
-    await update.message.reply_text(
-        t("admin_setpkg_ok", lang, user=username, pkg=pkg_label(pkg)),
-        parse_mode=ParseMode.MARKDOWN_V2,
-    )
-
-
-async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid  = str(update.effective_user.id)
-    lang = get_user_lang(uid)
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text(t("admin_no_perm", lang))
+#  PHOTO HANDLER
+# ══════════════════════════════════════════════
+async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not await check_join(ctx.bot, u.id):
+        await send_join_prompt(lambda text, **kw: update.message.reply_text(text, **kw))
         return
-    if not context.args:
+    sess  = get_session(u.id)
+    state = sess.get("state")
+    photo = update.message.photo[-1]
+
+    # ── Ảnh chuyển khoản thanh toán ──
+    if state == "wait_payment_photo":
+        success, label = await handle_payment_photo(photo.file_id, u, sessions_db, bot=update.get_bot())
+        if success:
+            await update.message.reply_text(
+                msg_pending_confirm(label),
+                reply_markup=kb_after_pay_confirm(),
+                parse_mode="MarkdownV2"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Có lỗi xảy ra\\. Vui lòng thử lại hoặc liên hệ admin\\.",
+                parse_mode="MarkdownV2"
+            )
+        return
+
+    if state == "wait_photo":
+        sess["photo_id"]   = photo.file_id
+        sess["photo_name"] = f"photo_{photo.file_id[:8]}.jpg"
+        sess["state"]      = "wait_prompt_choice"   # ← đổi state
         await update.message.reply_text(
-            t("admin_userinfo_usage", lang), parse_mode=ParseMode.MARKDOWN_V2
-        )
-        return
-    username = context.args[0].lstrip("@")
-    target   = get_user_by_username(username)
-    if not target:
+            "✅ *ĐÃ NHẬN ẢNH\\!*\n\n"
+            "✨ *BƯỚC 2 / 2* — Chọn kiểu chỉnh sửa:\n\n"
+            "👇 Bấm chọn nhanh bên dưới hoặc nhập prompt của bạn:",
+            reply_markup=kb_prompt_selector(),
+            parse_mode="MarkdownV2"
+        ); return
+
+    if state == "wait_video_photo":
+        sess["video_photo_id"]   = photo.file_id
+        sess["video_photo_name"] = f"video_{photo.file_id[:8]}.jpg"
+        sess["state"]            = "wait_video_prompt"
         await update.message.reply_text(
-            t("admin_user_notfound", lang, user=username),
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
+            "✅ *ĐÃ NHẬN ẢNH\\!*\n\n"
+            "✏️ *BƯỚC 2 / 2 — Mô tả chuyển động:*\n\n"
+            "💡 `gentle swaying motion`\n`hair blowing in the wind`\n`slow zoom in, cinematic`",
+            reply_markup=kb_cancel(), parse_mode="MarkdownV2"
+        ); return
+
+
+
+# ══════════════════════════════════════════════
+#  TEXT HANDLER
+# ══════════════════════════════════════════════
+async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not await check_join(ctx.bot, u.id):
+        await send_join_prompt(lambda text, **kw: update.message.reply_text(text, **kw))
         return
-    coins = target.get("coin", 0)
-    await update.message.reply_text(
-        t("admin_userinfo_body", lang,
-          user     = username,
-          uid      = target.get("id_user", "?"),
-          coins    = coins,
-          badge    = badge_for(coins),
-          pkg      = pkg_label(target.get("package", "free")),
-          images   = target.get("number_create_image", 0),
-          videos   = target.get("number_create_video", 0),
-          rollcall = target.get("roll_call", False),
-          language = target.get("language", DEFAULT_LANG),
-        ),
-        parse_mode=ParseMode.MARKDOWN_V2,
-    )
+    sess  = get_session(u.id)
+    state = sess.get("state")
+    text  = update.message.text.strip()
+    user_db = get_or_create_user(str(u.id), u.username or "")
+    coins   = user_db.get("coin", INIT_COINS)
+    package = user_db.get("package","free")
+    if state == "wait_prompt_choice":
+            # User bỏ qua selector, nhập thẳng prompt
+            sess["state"] = "wait_prompt"
+    # ── Prompt tạo ảnh ──
+    if state == "wait_prompt":
+        photo_id   = sess.get("photo_id")
+        photo_name = sess.get("photo_name","photo.jpg")
+        prompt     = text
+        if not photo_id:
+            await update.message.reply_text("❌ Không tìm thấy ảnh\\. Vui lòng gửi lại ảnh\\!", parse_mode="MarkdownV2")
+            clear_session(u.id); return
+
+        ok_spend, new_bal = db_spend_coins(str(u.id), COST_IMAGE)
+        if not ok_spend:
+            await update.message.reply_text(
+                f"⚠️ *KHÔNG ĐỦ XU\\!*\nCần `{COST_IMAGE}` xu \\| Có `{new_bal}` xu",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Mua Xu",        callback_data="pay_menu")],
+                    [InlineKeyboardButton("📅 Điểm Danh",     callback_data="rollcall")],
+                    [InlineKeyboardButton("🏠 Menu",          callback_data="home")],
+                ]), parse_mode="MarkdownV2"
+            )
+            clear_session(u.id); return
+
+        tick_counter = [0]
+        msg = await update.message.reply_text(
+            render_log_step(0, 9, ["  ⏳ Khởi động CLOTHESBOT...", f"  📝 Prompt: {prompt[:35]}"], "~30-40s", tick=0),
+            parse_mode="Markdown"
+        )
+
+        _photo_id   = photo_id
+        _photo_name = photo_name
+        clear_session(u.id)
+
+        import queue as _queue
+        log_queue = _queue.Queue()
+        def log_cb_q(lines, step=0): log_queue.put((list(lines), step))
+
+        async def updater():
+            while True:
+                try:
+                    lines, step = log_queue.get_nowait()
+                    tick_counter[0] += 1
+                    try:
+                        await msg.edit_text(render_log_step(step, 9, lines, "...", tick=tick_counter[0]), parse_mode="Markdown")
+                    except: pass
+                except _queue.Empty: pass
+                await asyncio.sleep(1.5)
+
+        if package == "free":
+            queue_msg = await update.message.reply_text("⏳ Đang kiểm tra hàng chờ\\.\\.\\.", parse_mode="MarkdownV2")
+            async def queue_status_cb(status_text, pos):
+                try: await queue_msg.edit_text(status_text, parse_mode="MarkdownV2")
+                except: pass
+            entered = await enter_queue(str(u.id), package, queue_status_cb)
+            if not entered:
+                await queue_msg.edit_text("❌ Hàng chờ quá tải\\. Vui lòng thử lại sau\\!", parse_mode="MarkdownV2")
+                db_add_coins(str(u.id), COST_IMAGE)
+                return
+            try: await queue_msg.delete()
+            except: pass
+
+        loop = asyncio.get_event_loop()
+        updater_task = asyncio.ensure_future(updater())
+
+        try:
+            photo_file  = await update.get_bot().get_file(_photo_id)
+            photo_bytes = await photo_file.download_as_bytearray()
+            log_cb_q(["  ✅ Ảnh đã tải xong!","  👗 Đang phân tích trang phục..."], 1)
+            result_bytes = await loop.run_in_executor(None, generate_image, bytes(photo_bytes), _photo_name, prompt, log_cb_q)
+        except Exception as e:
+            updater_task.cancel()
+            if package == "free": leave_queue(str(u.id))
+            db_add_coins(str(u.id), COST_IMAGE)
+            await msg.edit_text(
+                f"```\n{BANNER_ERROR}\n```\n\n❌ *XỬ LÝ THẤT BẠI*\n\n"
+                f"```\n  Lỗi: {str(e)[:55]}\n  💰 Đã hoàn lại: {COST_IMAGE} xu\n```",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Thử Lại", callback_data="img_start")],
+                    [InlineKeyboardButton("🏠 Menu",    callback_data="home")],
+                ]), parse_mode="Markdown"
+            )
+            return
+
+        updater_task.cancel()
+        if package == "free": leave_queue(str(u.id))
+        inc_image_count(str(u.id))
+
+        fresh_sess = get_session(u.id)
+        fresh_sess["last_image_bytes"] = result_bytes
+        fresh_sess["last_image_name"]  = _photo_name
+
+        await update.message.reply_photo(
+            photo   = result_bytes,
+            caption = (
+                f"✨ *CLOTHESBOT · KẾT QUẢ TẠO ẢNH*\n\n"
+                f"```\n  ✅ Xử lý thành công\n  📝 Prompt: {prompt[:40]}\n  💰 Còn lại: {new_bal} xu\n```\n\n"
+                f"👇 *Muốn tạo video từ ảnh này không?*"
+            ),
+            parse_mode   = "MarkdownV2",
+            reply_markup = kb_after_image(new_bal)
+        )
+        await msg.delete()
+        return
+
+    # ── Prompt tạo video ──
+    if state == "wait_video_prompt":
+        prompt = text
+        video_photo_bytes = sess.get("video_photo_bytes")
+        video_photo_name  = sess.get("video_photo_name","image.jpg")
+        video_photo_id    = sess.get("video_photo_id")
+
+        if not video_photo_bytes and not video_photo_id:
+            await update.message.reply_text("❌ Không tìm thấy ảnh\\. Vui lòng thử lại\\!", parse_mode="MarkdownV2")
+            clear_session(u.id); return
+
+        ok_spend, new_bal = db_spend_coins(str(u.id), COST_VIDEO)
+        if not ok_spend:
+            await update.message.reply_text(
+                f"⚠️ *KHÔNG ĐỦ XU\\!*\nCần `{COST_VIDEO}` xu \\| Có `{new_bal}` xu",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Mua Xu",    callback_data="pay_menu")],
+                    [InlineKeyboardButton("📅 Điểm Danh", callback_data="rollcall")],
+                    [InlineKeyboardButton("🏠 Menu",      callback_data="home")],
+                ]), parse_mode="MarkdownV2"
+            )
+            clear_session(u.id); return
+
+        tick_counter = [0]
+        msg = await update.message.reply_text(
+            render_video_log(0, 9, ["  🎬 Khởi động CLOTHESBOT Video...", f"  📝 Prompt: {prompt[:35]}", "  ⚠️  Quá trình này mất 2-5 phút!"], "~2-5 phút", tick=0),
+            parse_mode="Markdown"
+        )
+
+        _vbytes = video_photo_bytes
+        _vname  = video_photo_name
+        _vid    = video_photo_id
+        clear_session(u.id)
+
+        import queue as _queue
+        log_queue = _queue.Queue()
+        def log_cb_q(lines, step=0): log_queue.put((list(lines), step))
+
+        async def video_updater():
+            while True:
+                try:
+                    lines, step = log_queue.get_nowait()
+                    tick_counter[0] += 1
+                    try:
+                        await msg.edit_text(render_video_log(step, 9, lines, "đang xử lý...", tick=tick_counter[0]), parse_mode="Markdown")
+                    except: pass
+                except _queue.Empty: pass
+                await asyncio.sleep(3)
+
+        if package == "free":
+            queue_msg = await update.message.reply_text("⏳ Đang kiểm tra hàng chờ\\.\\.\\.", parse_mode="MarkdownV2")
+            async def queue_status_cb_v(status_text, pos):
+                try: await queue_msg.edit_text(status_text, parse_mode="MarkdownV2")
+                except: pass
+            entered = await enter_queue(str(u.id), package, queue_status_cb_v)
+            if not entered:
+                await queue_msg.edit_text("❌ Hàng chờ quá tải\\. Vui lòng thử lại sau\\!", parse_mode="MarkdownV2")
+                db_add_coins(str(u.id), COST_VIDEO)
+                return
+            try: await queue_msg.delete()
+            except: pass
+
+        loop = asyncio.get_event_loop()
+        updater_task = asyncio.ensure_future(video_updater())
+
+        try:
+            if not _vbytes and _vid:
+                photo_file = await update.get_bot().get_file(_vid)
+                raw = await photo_file.download_as_bytearray()
+                _vbytes = bytes(raw)
+            log_cb_q(["  ✅ Ảnh sẵn sàng!","  🔧 Đang khởi tạo phiên xử lý..."], 1)
+            video_bytes, video_url = await loop.run_in_executor(None, pika_create_account_and_generate, _vbytes, _vname, prompt, log_cb_q)
+        except Exception as e:
+            updater_task.cancel()
+            if package == "free": leave_queue(str(u.id))
+            db_add_coins(str(u.id), COST_VIDEO)
+            log.error(f"Video generate error: {e}")
+            await msg.edit_text(
+                f"```\n{BANNER_ERROR}\n```\n\n❌ *TẠO VIDEO THẤT BẠI*\n\n"
+                f"```\n  Lỗi: {str(e)[:60]}\n  💰 Đã hoàn lại: {COST_VIDEO} xu\n```",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Thử Lại", callback_data="vid_start")],
+                    [InlineKeyboardButton("🏠 Menu",    callback_data="home")],
+                ]), parse_mode="Markdown"
+            )
+            return
+
+        updater_task.cancel()
+        if package == "free": leave_queue(str(u.id))
+        inc_video_count(str(u.id))
+
+        await update.message.reply_video(
+            video        = video_bytes,
+            caption      = (
+                f"🎬 ✨ *CLOTHESBOT · VIDEO HOÀN TẤT\\!*\n\n"
+                f"```\n  ✅ Render thành công\n  📝 Prompt: {prompt[:40]}\n  🎞️  480p | 5 giây\n  💰 Còn lại: {new_bal} xu\n```"
+            ),
+            parse_mode       = "MarkdownV2",
+            reply_markup     = kb_after_video(new_bal),
+            supports_streaming = True,
+        )
+        await msg.delete()
+        return
 
 
-async def cmd_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid  = str(update.effective_user.id)
-    lang = get_user_lang(uid)
-    text = t("lang_title", lang) + "\n\n" + t("lang_subtitle", lang)
-    await update.message.reply_text(
-        text, parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=lang_keyboard(lang),
-    )
+    if state == "wait_key":
+        check_key = KeyManager(str(u.id)).check_key(text.strip())
+        if not check_key:
+            await update.message.reply_text(
+                "❌ KEY không hợp lệ hoặc đã được sử dụng\\. Vui lòng kiểm tra lại\\!",
+                parse_mode="MarkdownV2"
+            )
+            return
+        db_add_coins(str(u.id), 300)
+        await update.message.reply_text(
+            "✅ KEY hợp lệ\\! Bạn đã được cộng 300 xu\\.",
+            parse_mode="MarkdownV2"
+        )
+
+    # ── Default ──
+    user_db = get_or_create_user(str(u.id), u.username or "")
+    await animated_splash(update.message, u, user_db)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Application setup & run
-# ══════════════════════════════════════════════════════════════════════════════
-
-def setup_application(token: str = BOT_TOKEN) -> Application:
-    app = Application.builder().token(token).build()
-
-    app.add_handler(CommandHandler("start",      cmd_start))
-    app.add_handler(CommandHandler("language",   cmd_language))
-    app.add_handler(CommandHandler("addcoins",   cmd_addcoins))
-    app.add_handler(CommandHandler("setpackage", cmd_setpackage))
-    app.add_handler(CommandHandler("userinfo",   cmd_userinfo))
-
-    app.add_handler(CallbackQueryHandler(btn))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, on_message))
-
-    return app
-
+# ══════════════════════════════════════════════
+#  SETUP
+# ══════════════════════════════════════════════
+def setup_application(bot_token: str) -> Application:
+    application = Application.builder().token(bot_token).build()
+    application.add_handler(CommandHandler("start",      cmd_start))
+    application.add_handler(CommandHandler("addcoins",   cmd_addcoins))
+    application.add_handler(CommandHandler("setpackage", cmd_setpackage))
+    application.add_handler(CommandHandler("userinfo",   cmd_userinfo))
+    application.add_handler(CallbackQueryHandler(btn))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    return application
