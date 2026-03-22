@@ -1,4 +1,5 @@
-# bot.py  –  ClothesBot  (i18n refactor, aligned with database.py)
+# bottele.py  –  ClothesBot  (i18n refactor, aligned with database.py)
+# Place this file at: script/bottele.py
 # Language: English default, 100+ languages via translations.py
 #
 # DB table: manager_user
@@ -29,7 +30,16 @@
 import asyncio
 import logging
 import os
+import sys
 import time
+
+# ── Path fix (for Vercel / script/ subdirectory context) ─────────────────────
+# This file lives at script/bottele.py. Root dir must be in sys.path
+# so that `translations` (at root) can be imported.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+# ─────────────────────────────────────────────────────────────────────────────
 
 from telegram import (
     Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -40,7 +50,7 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters,
 )
 
-from script.database import (
+from .database import (
     get_user, get_or_create_user, update_user_field,
     add_coins, spend_coins,
     inc_image_count, inc_video_count,
@@ -50,13 +60,14 @@ from script.database import (
     admin_add_coins, admin_set_package,
     claim_slot, release_slot, get_active_slots,
 )
-from script.translations import (
+from translations import (
     t, lang_keyboard, get_lang_name,
     LANGUAGES, DEFAULT_LANG,
 )
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN        = os.getenv("BOT_TOKEN", "")
+WEB_BASE_URL     = os.getenv("WEB_BASE_URL", "")
 CHANNEL_ID       = os.getenv("CHANNEL_ID", "@your_channel")
 CHANNEL_LINK     = os.getenv("CHANNEL_LINK", "https://t.me/your_channel")
 ADMIN_IDS        = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
